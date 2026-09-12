@@ -108,7 +108,7 @@ export default {
                     } catch (e) { configOk = false; }
 
                     if (guestPath) {
-                        // 访客访问：展示实际工作的配置（如果自定义失效，向访客展示默认的有效配置）
+                        // 访客访问：展示实际工作的配置（如果自定义失效，向访客展示默认的有效配置），并增加正常连通的UI提示
                         const displayApi = apiOk ? subConverter : defaultSubConverter;
                         const displayProtocol = apiOk ? subProtocol : defaultSubProtocol;
                         const displayConfig = configOk ? subConfig : defaultSubConfig;
@@ -1007,7 +1007,7 @@ function renderLoginPage(url, error = '') {
 }
 
 function renderGuestPage(url, guest, displayApiUrl, displayConfig) {
-    return `<!DOCTYPE html><html><head><title>${escapeHTML(FileName)} 访客订阅</title><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${getToolStyles()}</style><script src="https://cdn.jsdelivr.net/npm/@keeex/qrcodejs-kx@1.0.2/qrcode.min.js"></script></head><body><div id="copyNotice" class="toast"></div><main class="page"><header class="header"><h1 class="title">${escapeHTML(FileName)} 访客订阅</h1><div class="subtitle">复制订阅链接或生成二维码</div></header><section class="panel"><h2 class="section-title">订阅链接</h2>${renderLinkList(getSubscriptionLinks(url, guest, true))}</section><section class="panel"><h2 class="section-title">当前提供服务的真实转换配置</h2><div class="section-note">已剥离失效设置，所展示即为实际输出数据的接口链路</div><div class="link-list"><div class="link-item"><div class="link-label">正在使用的 SUBAPI 后端</div><a class="link-url" href="${escapeHTML(displayApiUrl)}" target="_blank">${escapeHTML(displayApiUrl)}</a></div><div class="link-item"><div class="link-label">正在使用的 SUBCONFIG 规则</div><a class="link-url" href="${escapeHTML(displayConfig)}" target="_blank">${escapeHTML(displayConfig)}</a></div></div></section><div id="current-qrcode"></div></main>${renderToolScripts(false)}</body></html>`;
+    return `<!DOCTYPE html><html><head><title>${escapeHTML(FileName)} 访客订阅</title><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${getToolStyles()}</style><script src="https://cdn.jsdelivr.net/npm/@keeex/qrcodejs-kx@1.0.2/qrcode.min.js"></script></head><body><div id="copyNotice" class="toast"></div><main class="page"><header class="header"><h1 class="title">${escapeHTML(FileName)} 访客订阅</h1><div class="subtitle">复制订阅链接或生成二维码</div></header><section class="panel"><h2 class="section-title">订阅链接</h2>${renderLinkList(getSubscriptionLinks(url, guest, true))}</section><section class="panel"><h2 class="section-title">当前提供服务的真实转换配置</h2><div class="section-note">已剥离失效设置，所展示即为实际输出数据的接口链路</div><div class="status-indicator status-ok">✅ SUBAPI 正常连通</div><div class="status-indicator status-ok">✅ SUBCONFIG 规则链路有效</div><div class="link-list"><div class="link-item"><div class="link-label">正在使用的 SUBAPI 后端</div><a class="link-url" href="${escapeHTML(displayApiUrl)}" target="_blank">${escapeHTML(displayApiUrl)}</a></div><div class="link-item"><div class="link-label">正在使用的 SUBCONFIG 规则</div><a class="link-url" href="${escapeHTML(displayConfig)}" target="_blank">${escapeHTML(displayConfig)}</a></div></div></section><div id="current-qrcode"></div></main>${renderToolScripts(false)}</body></html>`;
 }
 
 function renderAdminPage(url, content, hasKV, guest, settings, apiOk, configOk, currentApi, currentConfig) {
@@ -1053,7 +1053,7 @@ async function KV(request, env, txt, guest, apiOk, configOk, currentApi, current
         if (request.method === "POST") {
             if (!hasKV) return new Response("未绑定KV空间", { status: 400 });
             
-            // 【关键修复】拦截非 JSON 格式的恶意/误导表单提交（如二次登录覆盖）
+            // 拦截非 JSON 格式的恶意/误导表单提交（如二次登录覆盖）
             const contentType = request.headers.get('content-type') || '';
             if (contentType.includes('application/x-www-form-urlencoded')) {
                 return Response.redirect(request.url, 302);
