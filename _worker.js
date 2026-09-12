@@ -20,16 +20,28 @@ export default {
       SUBAPI: 'SUBAPI.cmliussss.net',
       SUBCONFIG: 'https://raw.githubusercontent.com/cmliu/ACL4SSR/main/Clash/config/ACL4SSR_Online_Full_MultiMode.ini',
       NOADS: '加入TG群, 关注YouTube频道, http://',
-      LINKS: ''
+      LINKS: env.LINK || '' // 兜底读取环境变量中的旧节点
     };
 
-    // 从 KV 中读取用户动态配置
+    // 从 KV 中读取用户动态配置 (完美兼容旧版数据格式)
     if (env.KV) {
       try {
-        const kvStr = await env.KV.get('CF_SUB_CONFIG');
+        // 原版项目通常将数据存在以 TOKEN 命名的键值中
+        const kvStr = await env.KV.get(TOKEN);
         if (kvStr) {
           const kvConf = JSON.parse(kvStr);
-          config = { ...config, ...kvConf };
+          config.GUEST = kvConf.GUEST !== undefined ? kvConf.GUEST : config.GUEST;
+          config.USER = kvConf.USER !== undefined ? kvConf.USER : config.USER;
+          config.PASS = kvConf.PASS !== undefined ? kvConf.PASS : config.PASS;
+          
+          // 兼容原版旧格式的小驼峰命名 (subName, subApi等)
+          config.SUBNAME = kvConf.SUBNAME || kvConf.subName || config.SUBNAME;
+          config.SUBAPI = kvConf.SUBAPI || kvConf.subApi || config.SUBAPI;
+          config.SUBCONFIG = kvConf.SUBCONFIG || kvConf.subConfig || config.SUBCONFIG;
+          config.NOADS = kvConf.NOADS !== undefined ? kvConf.NOADS : (kvConf.noAds !== undefined ? kvConf.noAds : config.NOADS);
+          
+          // 读取节点列表
+          config.LINKS = kvConf.LINKS !== undefined ? kvConf.LINKS : config.LINKS;
         }
       } catch (e) {
         console.error("KV读取错误:", e);
@@ -69,7 +81,8 @@ export default {
               LINKS: formData.get('LINKS') || ''
             };
             if (env.KV) {
-              await env.KV.put('CF_SUB_CONFIG', JSON.stringify(newConf));
+              // 统一存入以 TOKEN 为键名的空间中
+              await env.KV.put(TOKEN, JSON.stringify(newConf));
               return new Response('Success', { status: 200 });
             } else {
               return new Response('未绑定KV空间，无法保存！', { status: 500 });
