@@ -89,29 +89,25 @@ export default {
         SUBUpdateTime = env.SUBUPTIME || SUBUpdateTime;
         const isProxyClientUA = ['clash', 'meta', 'mihomo', 'sing-box', 'singbox', 'surge', 'quantumult', 'loon', 'nekobox', 'v2rayn', 'v2rayng', 'shadowrocket', 'subconverter'].some(keyword => userAgent.includes(keyword));
 
-        // 如果路径既不是管理员，也不是访客，则拦截
+        // 如果路径既不是管理员，也不是访客，则拦截展示防探测页
         if (!([mytoken, fakeToken, 访客订阅].includes(token) || url.pathname == ("/" + mytoken) || url.pathname.includes("/" + mytoken + "?") || guestPath)) {
             if (env.URL302) return Response.redirect(env.URL302, 302);
             else if (env.URL) return await proxyURL(env.URL, url);
             else {
-                // =============== 强制纯净抓取 Pages 根目录下的 index.html ===============
+                // 强制纯净抓取 Pages 根目录下的 index.html
                 if (env.ASSETS) {
                     try {
-                        // 构造一个绝对纯净的 GET 请求，抛弃所有可能导致 304 或路由迷失的原请求头部
-                        let res = await env.ASSETS.fetch(new Request(url.origin + "/", { method: 'GET' }));
-                        if (!res.ok) {
-                            res = await env.ASSETS.fetch(new Request(url.origin + "/index.html", { method: 'GET' }));
-                        }
-                        if (res.ok) {
+                        const indexReq = new Request(new URL('/index.html', request.url), request);
+                        let res = await env.ASSETS.fetch(indexReq);
+                        if (res.status === 200 || res.status === 304) {
                             let html = await res.text();
-                            html = html.replace(/<title>.*?<\/title>/i, `<title>${escapeHTML(FileName)}</title>`);
+                            html = html.replace(/<title>.*?<\/title>/i, '<title>' + escapeHTML(FileName) + '</title>');
                             return new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=UTF-8' } });
                         }
                     } catch (e) {
                         console.error('ASSETS Fetch Error:', e);
                     }
                 }
-                
                 // CF Workers 部署无 index.html 或抓取彻底失败时兜底原生 nginx 页面
                 return new Response(await nginx(FileName), { status: 200, headers: { 'Content-Type': 'text/html; charset=UTF-8' } });
             }
@@ -268,7 +264,7 @@ export default {
             const utf8Encoder = new TextEncoder();
             const text = new TextDecoder().decode(utf8Encoder.encode(req_data));
 
-            // 去广告过滤
+            // 去广告过滤 (支持英文逗号、空格、换行分隔)
             let adKeywords = [];
             let filteredLines = text.split('\n');
             if (config_noAds) {
@@ -603,21 +599,23 @@ function getSubscriptionLinks(url, token) {
 }
 
 function renderLinkList(links) {
-    return `<div class="link-list">
-        ${links.map(([label, value]) => `
-            <div class="link-item">
-                <div class="link-label">${escapeHTML(label)}</div>
-                <a class="link-url" href="${escapeHTML(value)}" target="_blank">${escapeHTML(value)}</a>
-                <div class="actions">
-                    <button type="button" class="copy-btn" onclick="copySubscription(this)" data-url="${escapeHTML(value)}">复制</button>
-                    <button type="button" class="secondary hide-btn hidden" onclick="hideQrcode(this)">隐藏二维码</button>
-                </div>
-            </div>`).join('')}
-    </div>`;
+    let html = '<div class="link-list">';
+    for (let [label, value] of links) {
+        html += '<div class="link-item">';
+        html += '<div class="link-label">' + escapeHTML(label) + '</div>';
+        html += '<a class="link-url" href="' + escapeHTML(value) + '" target="_blank">' + escapeHTML(value) + '</a>';
+        html += '<div class="actions">';
+        html += '<button type="button" class="copy-btn" onclick="copySubscription(this)" data-url="' + escapeHTML(value) + '">复制</button>';
+        html += '<button type="button" class="secondary hide-btn hidden" onclick="hideQrcode(this)">隐藏二维码</button>';
+        html += '</div></div>';
+    }
+    html += '</div>';
+    return html;
 }
 
 function renderToolScripts(includeEditor = false) {
-    return `<script>
+    let script = '<sc' + 'ript>\n';
+    script += `
         let toastTimer;
         function showToast(message) {
             const toast = document.getElementById('copyNotice'); toast.textContent = message; toast.style.display = 'block';
@@ -640,7 +638,10 @@ function renderToolScripts(includeEditor = false) {
             qrcodeDiv.style.display = 'none'; qrcodeDiv.innerHTML = ''; button.classList.add('hidden');
             const copyBtn = button.closest('.actions').querySelector('.copy-btn'); if (copyBtn) copyBtn.classList.remove('hidden');
         }
-        ${includeEditor ? `
+    `;
+    
+    if (includeEditor) {
+        script += `
         function openSecurityModal() { document.getElementById('securityModal').style.display = 'flex'; }
         function closeSecurityModal() { document.getElementById('securityModal').style.display = 'none'; }
         
@@ -706,138 +707,89 @@ function renderToolScripts(includeEditor = false) {
             })
             .finally(function () { button.disabled = false; button.textContent = '保存节点订阅'; });
         }
-        ` : ''}
-    </script>`;
+        `;
+    }
+    script += '<\/sc' + 'ript>';
+    return script;
 }
 
 function renderLoginPage(url, error = '') {
-    return `<!DOCTYPE html><html><head><title>${escapeHTML(FileName)} 管理员登录</title><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${getToolStyles()}.login-btn { display: block; width: 100%; max-width: 280px; min-height: 44px; margin: 28px auto 6px; background: rgba(34, 34, 34, 0.85); border: 1px solid rgba(34, 34, 34, 0.2); border-radius: 12px; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.3s ease; } .login-btn:hover { background: rgba(34, 34, 34, 0.95); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); } @media (prefers-color-scheme: dark) { .login-btn { background: rgba(80, 80, 80, 0.9); border-color: rgba(255, 255, 255, 0.2); } .login-btn:hover { background: rgba(100, 100, 100, 1); } } .error { text-align: center; margin-top: 15px; color: #c62828; }</style></head>
-    <body style="display:flex; justify-content:center; align-items:center; min-height:100vh; margin:0;">
-    <main class="page" style="width: 100%; max-width: 420px; padding: 20px; margin:0;">
-        <section class="panel" style="padding: 30px 24px; text-align: center;">
-            <h1 class="title" style="margin-bottom: 10px;">${escapeHTML(FileName)}</h1>
-            <div class="subtitle" style="margin-bottom: 24px;">请登录管理员控制台</div>
-            <form method="POST" action="${escapeHTML(url.pathname)}" style="text-align: left;">
-                <div class="field"><label>用户名</label><input name="username" type="text" required autofocus></div>
-                <div class="field"><label>密码</label><input name="password" type="password" required></div>
-                <button type="submit" class="login-btn">登录</button>
-                ${error ? `<div class="error">${escapeHTML(error)}</div>` : ''}
-            </form>
-        </section>
-    </main></body></html>`;
+    let errorHtml = error ? '<div class="error">' + escapeHTML(error) + '</div>' : '';
+    let html = '<!DOCTYPE html><html><head><title>' + escapeHTML(FileName) + ' 管理员登录</title><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>' + getToolStyles() + '.login-btn { display: block; width: 100%; max-width: 280px; min-height: 44px; margin: 28px auto 6px; background: rgba(34, 34, 34, 0.85); border: 1px solid rgba(34, 34, 34, 0.2); border-radius: 12px; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.3s ease; } .login-btn:hover { background: rgba(34, 34, 34, 0.95); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); } @media (prefers-color-scheme: dark) { .login-btn { background: rgba(80, 80, 80, 0.9); border-color: rgba(255, 255, 255, 0.2); } .login-btn:hover { background: rgba(100, 100, 100, 1); } } .error { text-align: center; margin-top: 15px; color: #c62828; }</style></head>';
+    html += '<body style="display:flex; justify-content:center; align-items:center; min-height:100vh; margin:0;">';
+    html += '<main class="page" style="width: 100%; max-width: 420px; padding: 20px; margin:0;">';
+    html += '<section class="panel" style="padding: 30px 24px; text-align: center;">';
+    html += '<h1 class="title" style="margin-bottom: 10px;">' + escapeHTML(FileName) + '</h1>';
+    html += '<div class="subtitle" style="margin-bottom: 24px;">请登录管理员控制台</div>';
+    html += '<form method="POST" action="' + escapeHTML(url.pathname) + '" style="text-align: left;">';
+    html += '<div class="field"><label>用户名</label><input name="username" type="text" required autofocus></div>';
+    html += '<div class="field"><label>密码</label><input name="password" type="password" required></div>';
+    html += '<button type="submit" class="login-btn">登录</button>';
+    html += errorHtml;
+    html += '</form></section></main></body></html>';
+    return html;
 }
 
 function renderGuestPage(url, guest, displayApiUrl, displayConfig, apiStatus, configStatus, apiVersion) {
-    let apiHtml = '';
-    if (apiStatus !== 'error') apiHtml = `✅SUBAPI状态正常${apiVersion ? ` (${escapeHTML(apiVersion)})` : ''}`;
-    else apiHtml = `❌SUBAPI失效 等待维护`;
-
-    let configHtml = '';
-    if (configStatus !== 'error') configHtml = `✅SUBCONFIG状态正常`;
-    else configHtml = `❌SUBCONFIG失效 等待维护`;
-
-    return `<!DOCTYPE html><html><head><title>${escapeHTML(FileName)} 访客订阅</title><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${getToolStyles()}</style><script src="https://cdn.jsdelivr.net/npm/@keeex/qrcodejs-kx@1.0.2/qrcode.min.js"></script></head><body><div id="copyNotice" class="toast"></div><main class="page"><header class="header"><h1 class="title">${escapeHTML(FileName)} 访客订阅</h1><div class="subtitle">复制订阅链接或生成二维码</div></header><section class="panel"><h2 class="section-title">订阅链接</h2>${renderLinkList(getSubscriptionLinks(url, guest))}</section>
+    let apiHtml = apiStatus !== 'error' ? '✅SUBAPI状态正常' + (apiVersion ? ' (' + escapeHTML(apiVersion) + ')' : '') : '❌SUBAPI失效 等待维护';
+    let configHtml = configStatus !== 'error' ? '✅SUBCONFIG状态正常' : '❌SUBCONFIG失效 等待维护';
     
-    <section class="panel">
-        <h2 class="section-title">订阅转换服务</h2>
-        <div class="link-list">
-            <div class="link-item">
-                <div class="link-label">订阅转换后端 SUBAPI</div>
-                <div class="status-indicator ${apiStatus !== 'error' ? 'status-ok' : 'status-error'}">${apiHtml}</div>
-                <a class="link-url" href="${escapeHTML(displayApiUrl)}" target="_blank">${escapeHTML(displayApiUrl)}</a>
-            </div>
-            <div class="link-item">
-                <div class="link-label">订阅转换规则 SUBCONFIG</div>
-                <div class="status-indicator ${configStatus !== 'error' ? 'status-ok' : 'status-error'}">${configHtml}</div>
-                <a class="link-url" href="${escapeHTML(displayConfig)}" target="_blank">${escapeHTML(displayConfig)}</a>
-            </div>
-        </div>
-    </section>
-    <div id="current-qrcode"></div></main>${renderToolScripts(false)}</body></html>`;
+    let html = '<!DOCTYPE html><html><head><title>' + escapeHTML(FileName) + ' 访客订阅</title><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>' + getToolStyles() + '</style><script src="https://cdn.jsdelivr.net/npm/@keeex/qrcodejs-kx@1.0.2/qrcode.min.js"><\/script></head><body><div id="copyNotice" class="toast"></div><main class="page"><header class="header"><h1 class="title">' + escapeHTML(FileName) + ' 访客订阅</h1><div class="subtitle">复制订阅链接或生成二维码</div></header><section class="panel"><h2 class="section-title">订阅链接</h2>' + renderLinkList(getSubscriptionLinks(url, guest)) + '</section>';
+    
+    html += '<section class="panel"><h2 class="section-title">订阅转换服务</h2><div class="link-list">';
+    html += '<div class="link-item"><div class="link-label">订阅转换后端 SUBAPI</div><div class="status-indicator ' + (apiStatus !== 'error' ? 'status-ok' : 'status-error') + '">' + apiHtml + '</div><a class="link-url" href="' + escapeHTML(displayApiUrl) + '" target="_blank">' + escapeHTML(displayApiUrl) + '</a></div>';
+    html += '<div class="link-item"><div class="link-label">订阅转换规则 SUBCONFIG</div><div class="status-indicator ' + (configStatus !== 'error' ? 'status-ok' : 'status-error') + '">' + configHtml + '</div><a class="link-url" href="' + escapeHTML(displayConfig) + '" target="_blank">' + escapeHTML(displayConfig) + '</a></div>';
+    html += '</div></section><div id="current-qrcode"></div></main>' + renderToolScripts(false) + '</body></html>';
+    return html;
 }
 
 function renderAdminPage(url, content, hasKV, settings, apiStatus, configStatus, currentApi, currentConfig, apiVersion) {
-    let adminApiHtml = '';
-    let apiCss = '';
-    if (apiStatus === 'ok') { adminApiHtml = `✅SUBAPI状态正常${apiVersion ? ` (${escapeHTML(apiVersion)})` : ''}`; apiCss = 'status-ok'; }
-    else if (apiStatus === 'default') { adminApiHtml = `✅SUBAPI已自动切换为默认 状态正常${apiVersion ? ` (${escapeHTML(apiVersion)})` : ''}`; apiCss = 'status-ok'; }
-    else if (apiStatus === 'warn') { adminApiHtml = `⚠️SUBAPI无效 请留空或填写正确 已切换为默认配置`; apiCss = 'status-warn'; }
-    else { adminApiHtml = `❌SUBAPI失效 等待维护`; apiCss = 'status-error'; }
+    let adminApiHtml = ''; let apiCss = '';
+    if (apiStatus === 'ok') { adminApiHtml = '✅SUBAPI状态正常' + (apiVersion ? ' (' + escapeHTML(apiVersion) + ')' : ''); apiCss = 'status-ok'; }
+    else if (apiStatus === 'default') { adminApiHtml = '✅SUBAPI已自动切换为默认 状态正常' + (apiVersion ? ' (' + escapeHTML(apiVersion) + ')' : ''); apiCss = 'status-ok'; }
+    else if (apiStatus === 'warn') { adminApiHtml = '⚠️SUBAPI无效 请留空或填写正确 已切换为默认配置'; apiCss = 'status-warn'; }
+    else { adminApiHtml = '❌SUBAPI失效 等待维护'; apiCss = 'status-error'; }
 
-    let adminConfigHtml = '';
-    let configCss = '';
-    if (configStatus === 'ok') { adminConfigHtml = `✅SUBCONFIG状态正常`; configCss = 'status-ok'; }
-    else if (configStatus === 'default') { adminConfigHtml = `✅SUBCONFIG已自动切换为默认 状态正常`; configCss = 'status-ok'; }
-    else if (configStatus === 'warn') { adminConfigHtml = `⚠️SUBCONFIG无效 请留空或填写正确 已切换为默认配置`; configCss = 'status-warn'; }
-    else { adminConfigHtml = `❌SUBCONFIG失效 等待维护`; configCss = 'status-error'; }
+    let adminConfigHtml = ''; let configCss = '';
+    if (configStatus === 'ok') { adminConfigHtml = '✅SUBCONFIG状态正常'; configCss = 'status-ok'; }
+    else if (configStatus === 'default') { adminConfigHtml = '✅SUBCONFIG已自动切换为默认 状态正常'; configCss = 'status-ok'; }
+    else if (configStatus === 'warn') { adminConfigHtml = '⚠️SUBCONFIG无效 请留空或填写正确 已切换为默认配置'; configCss = 'status-warn'; }
+    else { adminConfigHtml = '❌SUBCONFIG失效 等待维护'; configCss = 'status-error'; }
 
-    return `<!DOCTYPE html><html><head><title>${escapeHTML(settings.subName)} - 控制台</title><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${getToolStyles()}</style><script src="https://cdn.jsdelivr.net/npm/@keeex/qrcodejs-kx@1.0.2/qrcode.min.js"></script></head><body>
-    <div id="copyNotice" class="toast"></div>
+    let securityBtn = hasKV ? '<button type="button" style="background: rgba(34, 34, 34, 0.8);" onclick="openSecurityModal()">🛡️ 安全设置</button>' : '';
+    let saveGlobalBtn = hasKV ? '<div class="actions" style="margin-top:16px;"><button type="button" onclick="saveConfig(this)">保存全局设置并重载</button><span id="configSaveStatus" class="muted"></span></div>' : '<p class="muted">请绑定变量名称为 KV 的 KV 命名空间</p>';
+    let nodeEditArea = hasKV ? '<textarea id="content" placeholder="在此输入单节点链接或订阅地址...">' + escapeHTML(content) + '</textarea><div class="actions"><button type="button" onclick="saveContent(this)">保存节点订阅</button><span id="saveStatus" class="muted"></span></div>' : '<p class="muted">请绑定变量名称为 KV 的 KV 命名空间</p>';
+
+    let html = '<!DOCTYPE html><html><head><title>' + escapeHTML(settings.subName) + ' - 控制台</title><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>' + getToolStyles() + '</style><script src="https://cdn.jsdelivr.net/npm/@keeex/qrcodejs-kx@1.0.2/qrcode.min.js"><\/script></head><body>';
+    html += '<div id="copyNotice" class="toast"></div>';
     
-    <div id="securityModal" class="modal-overlay">
-        <div class="modal-content">
-            <h2 class="section-title" style="font-size: 20px; margin-bottom: 20px;">🛡️ 账户与安全设置</h2>
-            <div class="field"><label>访客订阅入口 (GUEST)</label><input id="sec-guest" type="text" value="${escapeHTML(settings.guest || '')}" placeholder="留空则按内置算法自动生成"></div>
-            <div class="field"><label>后台登录账号 (USER)</label><input id="sec-user" type="text" value="${escapeHTML(settings.user || '')}" placeholder="例如：admin"></div>
-            <div class="field"><label>后台登录密码 (PASS)</label><input id="sec-pass" type="password" value="" placeholder="留空则不修改当前密码"></div>
-            <div class="field"><label>确认登录密码</label><input id="sec-pass2" type="password" value="" placeholder="留空则不修改当前密码"></div>
-            <div class="actions" style="margin-top: 24px; justify-content: flex-end;">
-                <button type="button" class="secondary" onclick="closeSecurityModal()">取消</button>
-                <button type="button" id="saveSecBtn" onclick="saveConfig(this)">保存修改</button>
-            </div>
-            <span id="secSaveStatus" class="muted" style="display:block; text-align:right; margin-top:8px;"></span>
-        </div>
-    </div>
+    html += '<div id="securityModal" class="modal-overlay"><div class="modal-content"><h2 class="section-title" style="font-size: 20px; margin-bottom: 20px;">🛡️ 账户与安全设置</h2>';
+    html += '<div class="field"><label>访客订阅入口 (GUEST)</label><input id="sec-guest" type="text" value="' + escapeHTML(settings.guest || '') + '" placeholder="留空则按内置算法自动生成"></div>';
+    html += '<div class="field"><label>后台登录账号 (USER)</label><input id="sec-user" type="text" value="' + escapeHTML(settings.user || '') + '" placeholder="例如：admin"></div>';
+    html += '<div class="field"><label>后台登录密码 (PASS)</label><input id="sec-pass" type="password" value="" placeholder="留空则不修改当前密码"></div>';
+    html += '<div class="field"><label>确认登录密码</label><input id="sec-pass2" type="password" value="" placeholder="留空则不修改当前密码"></div>';
+    html += '<div class="actions" style="margin-top: 24px; justify-content: flex-end;"><button type="button" class="secondary" onclick="closeSecurityModal()">取消</button><button type="button" id="saveSecBtn" onclick="saveConfig(this)">保存修改</button></div>';
+    html += '<span id="secSaveStatus" class="muted" style="display:block; text-align:right; margin-top:8px;"></span></div></div>';
 
-    <main class="page">
-    <header class="header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
-        <div>
-            <h1 class="title">${escapeHTML(settings.subName)}</h1>
-            <div class="subtitle">汇聚订阅控制台</div>
-        </div>
-        <div style="display:flex; gap:8px;">
-            ${hasKV ? `<button type="button" style="background: rgba(34, 34, 34, 0.8);" onclick="openSecurityModal()">🛡️ 安全设置</button>` : ''}
-            <button type="button" class="danger" onclick="window.location.href='?logout=1'">🚪 退出</button>
-        </div>
-    </header>
+    html += '<main class="page"><header class="header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">';
+    html += '<div><h1 class="title">' + escapeHTML(settings.subName) + '</h1><div class="subtitle">汇聚订阅控制台</div></div>';
+    html += '<div style="display:flex; gap:8px;">' + securityBtn + '<button type="button" class="danger" onclick="window.location.href=\'?logout=1\'">🚪 退出</button></div></header>';
 
-    <section class="panel">
-        <h2 class="section-title">全局名称设置 (SUBNAME)</h2>
-        <div class="field"><input id="config-subname" type="text" value="${escapeHTML(settings.subName)}" placeholder="例如：CF-SUB"></div>
-    </section>
+    html += '<section class="panel"><h2 class="section-title">全局名称设置 (SUBNAME)</h2><div class="field"><input id="config-subname" type="text" value="' + escapeHTML(settings.subName) + '" placeholder="例如：CF-SUB"></div></section>';
 
-    <section class="panel">
-        <h2 class="section-title">订阅转换后端 SUBAPI</h2>
-        <div class="field">
-            <input id="config-subapi" type="text" value="${escapeHTML(settings.subApi)}" placeholder="例如：SUBAPI.cmliussss.net">
-            <div class="status-indicator ${apiCss}" style="margin-top: 8px;">${adminApiHtml}</div>
-            <a class="link-url" href="${escapeHTML(currentApi)}" target="_blank" style="margin-top: 8px; display: block;">${escapeHTML(currentApi)}</a>
-        </div>
-    </section>
+    html += '<section class="panel"><h2 class="section-title">订阅转换后端 SUBAPI</h2><div class="field"><input id="config-subapi" type="text" value="' + escapeHTML(settings.subApi) + '" placeholder="例如：SUBAPI.cmliussss.net">';
+    html += '<div class="status-indicator ' + apiCss + '" style="margin-top: 8px;">' + adminApiHtml + '</div><a class="link-url" href="' + escapeHTML(currentApi) + '" target="_blank" style="margin-top: 8px; display: block;">' + escapeHTML(currentApi) + '</a></div></section>';
     
-    <section class="panel">
-        <h2 class="section-title">订阅转换规则 SUBCONFIG</h2>
-        <div class="field">
-            <textarea id="config-subconfig" style="min-height:80px">${escapeHTML(settings.subConfig)}</textarea>
-            <div class="status-indicator ${configCss}" style="margin-top: 8px;">${adminConfigHtml}</div>
-            <a class="link-url" href="${escapeHTML(currentConfig)}" target="_blank" style="margin-top: 8px; display: block;">${escapeHTML(currentConfig)}</a>
-        </div>
-    </section>
+    html += '<section class="panel"><h2 class="section-title">订阅转换规则 SUBCONFIG</h2><div class="field"><textarea id="config-subconfig" style="min-height:80px">' + escapeHTML(settings.subConfig) + '</textarea>';
+    html += '<div class="status-indicator ' + configCss + '" style="margin-top: 8px;">' + adminConfigHtml + '</div><a class="link-url" href="' + escapeHTML(currentConfig) + '" target="_blank" style="margin-top: 8px; display: block;">' + escapeHTML(currentConfig) + '</a></div></section>';
 
-    <section class="panel">
-        <h2 class="section-title">去广告关键字 NOADS</h2>
-        <div class="field">
-            <textarea id="config-noads" style="min-height: 80px;" placeholder="[示例: 加入TG群, 订阅YouTube频道, https://t.me ......]">${escapeHTML(settings.noAds)}</textarea>
-            <div class="section-note">使用英文逗号、空格或换行分隔</div>
-        </div>
-        ${hasKV ? `<div class="actions" style="margin-top:16px;"><button type="button" onclick="saveConfig(this)">保存全局设置并重载</button><span id="configSaveStatus" class="muted"></span></div>` : '<p class="muted">请绑定变量名称为 KV 的 KV 命名空间</p>'}
-    </section>
+    html += '<section class="panel"><h2 class="section-title">去广告关键字 NOADS</h2><div class="field"><textarea id="config-noads" style="min-height: 80px;" placeholder="[示例: 加入TG群, 订阅YouTube频道, https://t.me ......]">' + escapeHTML(settings.noAds) + '</textarea><div class="section-note">使用英文逗号、空格或换行分隔</div></div>' + saveGlobalBtn + '</section>';
 
-    <section class="panel"><h2 class="section-title">汇聚订阅节点编辑</h2>${hasKV ? `<textarea id="content" placeholder="在此输入单节点链接或订阅地址...">${escapeHTML(content)}</textarea><div class="actions"><button type="button" onclick="saveContent(this)">保存节点订阅</button><span id="saveStatus" class="muted"></span></div>` : '<p class="muted">请绑定变量名称为 KV 的 KV 命名空间</p>'}</section>
+    html += '<section class="panel"><h2 class="section-title">汇聚订阅节点编辑</h2>' + nodeEditArea + '</section>';
+    html += '<section class="panel"><h2 class="section-title">管理员直接订阅链接</h2>' + renderLinkList(getSubscriptionLinks(url, mytoken)) + '</section>';
+    html += '<div id="current-qrcode"></div></main>' + renderToolScripts(true) + '</body></html>';
     
-    <section class="panel"><h2 class="section-title">管理员直接订阅链接</h2>${renderLinkList(getSubscriptionLinks(url, mytoken))}</section>
-    
-    <div id="current-qrcode"></div></main>${renderToolScripts(true)}</body></html>`;
+    return html;
 }
 
 async function KV(request, env, txt, guest, apiStatus, configStatus, currentApiUrl, currentConfigUrl, apiVersion) {
