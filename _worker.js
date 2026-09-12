@@ -16,7 +16,7 @@ let urls = [];
 
 // ================= 全局默认配置 =================
 const defaultSubConverter = "SUBAPI.cmliussss.net"; // 默认后端
-const defaultSubConfig = "https://raw.githubusercontent.com/hooleeas/ACL4SSR/refs/heads/master/Clash/config/ACL4SSR_Mini_NoAuto.ini"; // 默认规则
+const defaultSubConfig = "https://raw.githubusercontent.com/hooleeas/ACL4SSR/refs/heads/master/Clash/config/BypassCN_NoAuto_Ping.ini"; // 默认规则
 const defaultSubProtocol = "https";
 // ================================================
 
@@ -35,6 +35,17 @@ export default {
         mytoken = env.TOKEN || mytoken;
         let adminUser = env.USER || '';
         let adminPass = env.PASS || '';
+
+        // 处理退出登录
+        if (url.searchParams.has('logout')) {
+            return new Response('正在退出...', {
+                status: 302,
+                headers: {
+                    'Location': url.pathname,
+                    'Set-Cookie': 'CF_SUB_ADMIN=; Max-Age=0; Path=/; HttpOnly; SameSite=Lax'
+                }
+            });
+        }
 
         // 从 KV 获取动态设置的变量
         if (env.KV) {
@@ -83,67 +94,95 @@ export default {
             if (env.URL302) return Response.redirect(env.URL302, 302);
             else if (env.URL) return await proxyURL(env.URL, url);
             else {
-                // 优先尝试读取 Pages 同目录下的 index.html 用于正规页面渲染
                 if (env.ASSETS) {
                     try {
                         let assetRes = await env.ASSETS.fetch(new Request(url.origin + '/index.html', request));
                         if (assetRes.status === 200) {
                             let html = await assetRes.text();
                             html = html.replace(/<title>.*?<\/title>/i, `<title>${escapeHTML(FileName)}</title>`);
-                            return new Response(html, {
-                                status: 200,
-                                headers: { 'Content-Type': 'text/html; charset=UTF-8' }
-                            });
+                            return new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=UTF-8' } });
                         }
-                    } catch (e) {
-                        // 忽略错误，降级使用原生 nginx 输出
-                    }
+                    } catch (e) {}
                 }
-                // CF Workers 部署无 index.html 或读取失败时兜底
-                return new Response(await nginx(FileName), { 
-                    status: 200,
-                    headers: { 'Content-Type': 'text/html; charset=UTF-8' },
-                });
+                return new Response(await nginx(FileName), { status: 200, headers: { 'Content-Type': 'text/html; charset=UTF-8' } });
             }
         } else {
             if (env.KV) {
                 await 迁移地址列表(env, 'LINK.txt');
-                // 浏览器直接访问且不带转换参数时的UI分流逻辑
+                // 浏览器直接访问 UI 逻辑
                 if (userAgent.includes('mozilla') && !url.search && !isProxyClientUA) {
                     
-                    // 进行后端探针检测 (避免超时导致卡顿，设1.5秒限制)
-                    let apiOk = true;
-                    let configOk = true;
+                    // ================= 后端连通性与规则有效性独立检测逻辑 =================
+                    let isCustomApi = !!subConverter && subConverter !== defaultSubConverter;
+                    let isCustomConfig = !!subConfig && subConfig !== defaultSubConfig;
+
+                    let apiStatus = 'ok'; // ok, default, warn, error
+                    let configStatus = 'ok';
                     let apiVersion = '';
                     
-                    try {
-                        const controller = new AbortController();
-                        const timeout = setTimeout(() => controller.abort(), 1500);
-                        const resApi = await fetch(`${subProtocol}://${subConverter}/version`, { signal: controller.signal });
-                        apiOk = resApi.ok;
-                        if (apiOk) {
-                            const text = await resApi.text();
-                            apiVersion = text.trim().substring(0, 30); // 截取核心版本号
+                    let targetApi = subConverter || defaultSubConverter;
+                    let targetProtocol = subConverter ? subProtocol : defaultSubProtocol;
+                    let targetConfig = subConfig || defaultSubConfig;
+
+                    async function probeApi(api, protocol) {
+                        try {
+                            const controller = new AbortController();
+                            const timeout = setTimeout(() => controller.abort(), 1200);
+                            const res = await fetch(`${protocol}://${api}/version`, { signal: controller.signal });
+                            clearTimeout(timeout);
+                            if (res.ok) return { ok: true, version: (await res.text()).trim().substring(0, 30) };
+                            return { ok: false };
+                        } catch (e) { return { ok: false }; }
+                    }
+
+                    async function probeConfig(configUrl) {
+                        if (!configUrl) return false;
+                        try {
+                            const controller = new AbortController();
+                            const timeout = setTimeout(() => controller.abort(), 1200);
+                            const res = await fetch(configUrl, { method: 'GET', signal: controller.signal });
+                            clearTimeout(timeout);
+                            return res.ok;
+                        } catch (e) { return false; }
+                    }
+
+                    // 1. API 独立检测
+                    if (isCustomApi) {
+                        let res = await probeApi(targetApi, targetProtocol);
+                        if (res.ok) { apiStatus = 'ok'; apiVersion = res.version; }
+                        else {
+                            let fallback = await probeApi(defaultSubConverter, defaultSubProtocol);
+                            if (fallback.ok) { apiStatus = 'warn'; apiVersion = fallback.version; targetApi = defaultSubConverter; targetProtocol = defaultSubProtocol; }
+                            else { apiStatus = 'error'; targetApi = defaultSubConverter; targetProtocol = defaultSubProtocol; }
                         }
-                        clearTimeout(timeout);
-                    } catch (e) { apiOk = false; }
+                    } else {
+                        let res = await probeApi(defaultSubConverter, defaultSubProtocol);
+                        if (res.ok) { apiStatus = 'default'; apiVersion = res.version; targetApi = defaultSubConverter; targetProtocol = defaultSubProtocol; }
+                        else { apiStatus = 'error'; targetApi = defaultSubConverter; targetProtocol = defaultSubProtocol; }
+                    }
 
-                    try {
-                        const controller = new AbortController();
-                        const timeout = setTimeout(() => controller.abort(), 1500);
-                        const resConfig = await fetch(subConfig, { method: 'GET', signal: controller.signal });
-                        configOk = resConfig.ok;
-                        clearTimeout(timeout);
-                    } catch (e) { configOk = false; }
+                    // 2. Config 独立检测
+                    if (isCustomConfig) {
+                        let ok = await probeConfig(targetConfig);
+                        if (ok) { configStatus = 'ok'; }
+                        else {
+                            let fallbackOk = await probeConfig(defaultSubConfig);
+                            if (fallbackOk) { configStatus = 'warn'; targetConfig = defaultSubConfig; }
+                            else { configStatus = 'error'; targetConfig = defaultSubConfig; }
+                        }
+                    } else {
+                        let ok = await probeConfig(defaultSubConfig);
+                        if (ok) { configStatus = 'default'; targetConfig = defaultSubConfig; }
+                        else { configStatus = 'error'; targetConfig = defaultSubConfig; }
+                    }
 
-                    const displayApi = apiOk ? subConverter : defaultSubConverter;
-                    const displayProtocol = apiOk ? subProtocol : defaultSubProtocol;
-                    const displayConfig = configOk ? subConfig : defaultSubConfig;
-                    const currentApiUrl = `${displayProtocol}://${displayApi}`;
+                    const currentApiUrl = `${targetProtocol}://${targetApi}`;
+                    const currentConfigUrl = targetConfig;
+                    // =================================================================
 
                     if (guestPath) {
-                        // 访客访问
-                        return new Response(renderGuestPage(url, 访客订阅, currentApiUrl, displayConfig, apiOk, configOk, apiVersion), { headers: { 'Content-Type': 'text/html;charset=utf-8' } });
+                        // 访客访问：只展示最终实际生效的结果
+                        return new Response(renderGuestPage(url, 访客订阅, currentApiUrl, currentConfigUrl, apiStatus, configStatus, apiVersion), { headers: { 'Content-Type': 'text/html;charset=utf-8' } });
                     } else {
                         if (isAdminLoginEnabled(adminUser, adminPass)) {
                             const isLoggedIn = await isAdminLoggedIn(request, mytoken, adminUser, adminPass);
@@ -153,7 +192,7 @@ export default {
                             }
                         }
                         // 管理员访问
-                        return await KV(request, env, 'LINK.txt', 访客订阅, apiOk, configOk, currentApiUrl, displayConfig, apiVersion);
+                        return await KV(request, env, 'LINK.txt', 访客订阅, apiStatus, configStatus, currentApiUrl, currentConfigUrl, apiVersion);
                     }
                 } else {
                     MainData = await env.KV.get('LINK.txt') || MainData;
@@ -200,7 +239,6 @@ export default {
                 订阅转换URL += "|" + 请求订阅响应内容[1];
 
                 if (订阅格式 == 'base64' && !isSubConverterRequest && 请求订阅响应内容[1].includes('://')) {
-                    // 支持 base64 mixed 并加入容灾回退
                     try {
                         const u = buildSubUrl(subConverter, subConfig, 'mixed', 请求订阅响应内容[1], subProtocol);
                         const res = await fetch(u, { headers: { 'User-Agent': 'v2rayN/CF-SUB' } });
@@ -211,7 +249,7 @@ export default {
                             const fallbackU = buildSubUrl(defaultSubConverter, defaultSubConfig, 'mixed', 请求订阅响应内容[1], defaultSubProtocol);
                             const res2 = await fetch(fallbackU, { headers: { 'User-Agent': 'v2rayN/CF-SUB' } });
                             if (res2.ok) req_data += '\n' + atob(await res2.text());
-                        } catch(e) { console.log('订阅转换 base64 容灾也失败'); }
+                        } catch(e) {}
                     }
                 }
             }
@@ -267,7 +305,6 @@ export default {
             if (订阅格式 == 'base64' || token == fakeToken) {
                 return new Response(base64Data, { headers: responseHeaders });
             } else {
-                // 最终带有容灾机制的订阅请求
                 try {
                     const finalUrl = buildSubUrl(subConverter, subConfig, 订阅格式, 订阅转换URL, subProtocol);
                     const res = await fetch(finalUrl, { headers: { 'User-Agent': userAgentHeader } });
@@ -277,7 +314,6 @@ export default {
                     if (!userAgent.includes('mozilla')) responseHeaders["Content-Disposition"] = `attachment; filename*=utf-8''${encodeURIComponent(FileName)}`;
                     return new Response(content, { headers: responseHeaders });
                 } catch (error) {
-                    // 后端与规则失效时，强行使用默认配置完成转换保底
                     try {
                         const fallbackUrl = buildSubUrl(defaultSubConverter, defaultSubConfig, 订阅格式, 订阅转换URL, defaultSubProtocol);
                         const resFb = await fetch(fallbackUrl, { headers: { 'User-Agent': userAgentHeader } });
@@ -287,7 +323,6 @@ export default {
                         if (!userAgent.includes('mozilla')) responseHeaders["Content-Disposition"] = `attachment; filename*=utf-8''${encodeURIComponent(FileName)}`;
                         return new Response(contentFb, { headers: responseHeaders });
                     } catch (fallbackError) {
-                        // 连保底也挂了，直接退化为输出 Base64
                         return new Response(base64Data, { headers: responseHeaders });
                     }
                 }
@@ -319,23 +354,14 @@ async function nginx(titleName) {
 <head>
 <title>${escapeHTML(titleName)}</title>
 <style>
-    body {
-        width: 35em;
-        margin: 0 auto;
-        font-family: Tahoma, Verdana, Arial, sans-serif;
-    }
+    body { width: 35em; margin: 0 auto; font-family: Tahoma, Verdana, Arial, sans-serif; }
 </style>
 </head>
 <body>
 <h1>Welcome to nginx!</h1>
-<p>If you see this page, the nginx web server is successfully installed and
-working. Further configuration is required.</p>
-
-<p>For online documentation and support please refer to
-<a href="http://nginx.org/">nginx.org</a>.<br/>
-Commercial support is available at
-<a href="http://nginx.com/">nginx.com</a>.</p>
-
+<p>If you see this page, the nginx web server is successfully installed and working. Further configuration is required.</p>
+<p>For online documentation and support please refer to <a href="http://nginx.org/">nginx.org</a>.<br/>
+Commercial support is available at <a href="http://nginx.com/">nginx.com</a>.</p>
 <p><em>Thank you for using nginx.</em></p>
 </body>
 </html>`;
@@ -482,20 +508,21 @@ async function handleAdminLogin(request, url, token, user, pass) {
     return new Response(renderLoginPage(url, '用户名或密码错误'), { status: 401, headers: { 'Content-Type': 'text/html;charset=utf-8', 'Cache-Control': 'no-store' } });
 }
 
+// ==================== UI 样式与渲染模块 ====================
 function getToolStyles() {
     return `
         * { box-sizing: border-box; }
-        body { margin: 0; background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%); color: #202124; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 14px; line-height: 1.5; min-height: 100vh; }
+        body { margin: 0; background: #f5f7fa; color: #202124; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; font-size: 14px; line-height: 1.5; min-height: 100vh; transition: background 0.3s, color 0.3s; }
         .page { width: 100%; max-width: 760px; margin: 0 auto; padding: 18px 14px 28px; }
         .header { margin-bottom: 14px; }
-        .title { margin: 0; font-size: 28px; font-weight: 700; line-height: 1.2; color: #1a1a1a; }
+        .title { margin: 0; font-size: 28px; font-weight: 700; line-height: 1.2; color: #1a1a1a; transition: color 0.3s; }
         .subtitle { margin-top: 8px; color: #666; font-size: 13px; }
-        .panel { background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px); border: 1px solid rgba(255, 255, 255, 0.5); border-radius: 20px; padding: 16px; margin-top: 12px; box-shadow: 0 8px 32px 0 rgba(31, 38, 135, 0.1); }
+        .panel { background: rgba(255, 255, 255, 0.85); border: 1px solid rgba(229, 229, 223, 0.8); border-radius: 20px; padding: 16px; margin-top: 12px; box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05); transition: background 0.3s, border-color 0.3s; }
         .section-title { margin: 0 0 10px; font-size: 15px; font-weight: 700; }
         .section-note { margin: 4px 0 10px; color: #888; font-size: 12px; }
         .link-list { display: grid; gap: 10px; }
-        .link-item { border: 1px solid rgba(229, 229, 223, 0.6); border-radius: 12px; padding: 12px; background: rgba(255, 255, 255, 0.5); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
-        .link-label { font-weight: 600; margin-bottom: 8px; color: #1a1a1a; }
+        .link-item { border: 1px solid rgba(229, 229, 223, 0.6); border-radius: 12px; padding: 12px; background: rgba(255, 255, 255, 0.5); transition: background 0.3s, border-color 0.3s; }
+        .link-label { font-weight: 600; margin-bottom: 8px; color: #1a1a1a; transition: color 0.3s; }
         .link-url { display: block; width: 100%; word-wrap: break-word; overflow-wrap: break-word; word-break: break-all; white-space: normal; padding: 10px 10px; border: 1px solid rgba(229, 229, 223, 0.8); border-radius: 8px; background: rgba(250, 250, 250, 0.7); color: #1f4b99; text-decoration: none; transition: all 0.3s ease; }
         .link-url:hover { background: rgba(31, 75, 153, 0.05); border-color: #1f4b99; }
         .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
@@ -503,29 +530,51 @@ function getToolStyles() {
         button:hover { background: rgba(34, 34, 34, 0.9); box-shadow: 0 4px 12px rgba(34, 34, 34, 0.15); }
         button.secondary { background: rgba(255, 255, 255, 0.8); color: #222; border-color: rgba(200, 200, 192, 0.5); }
         button.secondary:hover { background: rgba(255, 255, 255, 0.95); }
-        button.hidden-btn { background: rgba(34, 34, 34, 0.6); }
+        button.danger { background: rgba(220, 53, 69, 0.8); border-color: rgba(220, 53, 69, 0.2); }
+        button.danger:hover { background: rgba(220, 53, 69, 0.95); box-shadow: 0 4px 12px rgba(220, 53, 69, 0.2); }
         button:disabled { opacity: 0.65; cursor: default; }
         .field { margin-top: 12px; }
-        label { display: block; margin-bottom: 6px; font-weight: 600; color: #1a1a1a; }
-        input, textarea { width: 100%; border: 1px solid rgba(207, 207, 200, 0.6); border-radius: 10px; background: rgba(255, 255, 255, 0.8); color: #202124; font-size: 14px; padding: 10px; transition: border-color 0.2s; word-wrap: break-word; word-break: break-all; white-space: pre-wrap; }
-        input:focus, textarea:focus { outline: none; border-color: #3b82f6; background: #fff; }
+        label { display: block; margin-bottom: 6px; font-weight: 600; color: #1a1a1a; transition: color 0.3s; }
+        input, textarea { width: 100%; border: 1px solid rgba(207, 207, 200, 0.6); border-radius: 10px; background: rgba(255, 255, 255, 0.8); color: #202124; font-size: 14px; padding: 10px; transition: all 0.3s ease; word-wrap: break-word; word-break: break-all; white-space: pre-wrap; }
+        input:focus, textarea:focus { outline: none; border-color: #3b82f6; background: #fff; box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1); }
         input { height: 42px; white-space: normal; }
         textarea { min-height: 200px; line-height: 1.5; resize: vertical; }
         .error { color: #b00020; margin-top: 10px; }
-        .muted { color: #666; font-size: 13px; margin-left: 8px; }
+        .muted { color: #666; font-size: 13px; margin-left: 8px; transition: color 0.3s; }
         .toast { position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%); display: none; min-width: 190px; max-width: calc(100vw - 40px); padding: 12px 18px; text-align: center; color: #fff; background: rgba(0, 0, 0, 0.82); border-radius: 12px; z-index: 9999; }
-        .status-indicator { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 8px; font-weight: 600; width: 100%; word-break: break-all;}
-        .status-ok { background: rgba(76, 175, 80, 0.15); color: #2e7d32; border: 1px solid rgba(76, 175, 80, 0.2); }
+        .status-indicator { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 8px; font-size: 13px; margin-bottom: 8px; font-weight: 600; width: 100%; word-break: break-all; transition: background 0.3s, color 0.3s, border-color 0.3s; }
+        .status-ok { background: rgba(76, 175, 80, 0.1); color: #2e7d32; border: 1px solid rgba(76, 175, 80, 0.2); }
+        .status-warn { background: rgba(255, 152, 0, 0.1); color: #f57c00; border: 1px solid rgba(255, 152, 0, 0.2); }
         .status-error { background: rgba(244, 67, 54, 0.1); color: #c62828; border: 1px solid rgba(244, 67, 54, 0.2); }
         #current-qrcode { display: none; margin-top: 12px; padding: 12px; border: 1px solid rgba(229, 229, 223, 0.6); border-radius: 12px; background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(10px); width: fit-content; max-width: 100%; }
         .hidden { display: none; }
-        /* 模态框样式 */
         .modal-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); display: none; justify-content: center; align-items: center; z-index: 1000; }
-        .modal-content { background: rgba(255, 255, 255, 0.85); border-radius: 20px; padding: 24px; width: 90%; max-width: 420px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); border: 1px solid rgba(255, 255, 255, 0.5); }
+        .modal-content { background: rgba(255, 255, 255, 0.95); border-radius: 20px; padding: 24px; width: 90%; max-width: 420px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); border: 1px solid rgba(255, 255, 255, 0.5); transition: background 0.3s, border-color 0.3s; }
+
+        /* 暗黑模式自适应跟随系统 */
+        @media (prefers-color-scheme: dark) {
+            body { background: #121212; color: #e0e0e0; }
+            .title { color: #f5f5f5; }
+            .subtitle, .section-note, .muted { color: #aaa; }
+            .panel { background: rgba(30, 30, 30, 0.75); border-color: rgba(255, 255, 255, 0.1); box-shadow: 0 4px 20px rgba(0,0,0,0.3); }
+            .link-item { background: rgba(40, 40, 40, 0.5); border-color: rgba(255, 255, 255, 0.1); }
+            .link-label, label { color: #ddd; }
+            .link-url { background: rgba(0, 0, 0, 0.3); color: #64b5f6; border-color: rgba(255,255,255,0.1); }
+            .link-url:hover { background: rgba(100, 181, 246, 0.1); border-color: #64b5f6; }
+            input, textarea { background: rgba(20, 20, 20, 0.8); color: #fff; border-color: rgba(255,255,255,0.2); }
+            input:focus, textarea:focus { background: #000; border-color: #3b82f6; }
+            button.secondary { background: rgba(60, 60, 60, 0.8); color: #fff; border-color: rgba(255,255,255,0.2); }
+            button.secondary:hover { background: rgba(80, 80, 80, 0.95); }
+            .status-ok { background: rgba(129, 199, 132, 0.1); color: #81c784; border-color: rgba(129, 199, 132, 0.2); }
+            .status-warn { background: rgba(255, 183, 77, 0.1); color: #ffb74d; border-color: rgba(255, 183, 77, 0.2); }
+            .status-error { background: rgba(229, 115, 115, 0.1); color: #e57373; border-color: rgba(229, 115, 115, 0.2); }
+            .modal-content { background: rgba(30, 30, 30, 0.95); border-color: rgba(255, 255, 255, 0.1); }
+            #current-qrcode { background: rgba(255, 255, 255, 0.9); } /* 强制二维码白底防止反色扫不出 */
+        }
     `;
 }
 
-function getSubscriptionLinks(url, token, isGuest = false) {
+function getSubscriptionLinks(url, token) {
     const base = `https://${url.hostname}/${token}`;
     return [
         ['自适应订阅地址', base],
@@ -539,10 +588,10 @@ function getSubscriptionLinks(url, token, isGuest = false) {
 
 function renderLinkList(links) {
     return `<div class="link-list">
-        ${links.map(([label, value, displayValue]) => `
+        ${links.map(([label, value]) => `
             <div class="link-item">
                 <div class="link-label">${escapeHTML(label)}</div>
-                <a class="link-url" href="${escapeHTML(value)}" target="_blank">${escapeHTML(displayValue || value)}</a>
+                <a class="link-url" href="${escapeHTML(value)}" target="_blank">${escapeHTML(value)}</a>
                 <div class="actions">
                     <button type="button" class="copy-btn" onclick="copySubscription(this)" data-url="${escapeHTML(value)}">复制</button>
                     <button type="button" class="secondary hide-btn hidden" onclick="hideQrcode(this)">隐藏二维码</button>
@@ -562,7 +611,7 @@ function renderToolScripts(includeEditor = false) {
             navigator.clipboard.writeText(button.dataset.url).then(function () {
                 showToast('已复制到剪贴板'); showQrcode(button); button.classList.add('hidden');
                 const hideBtn = button.closest('.actions').querySelector('.hide-btn'); if (hideBtn) hideBtn.classList.remove('hidden');
-            }).catch(function (err) { showToast('复制失败，请手动复制'); });
+            }).catch(function () { showToast('复制失败，请手动复制'); });
         }
         function showQrcode(button) {
             const qrcodeDiv = document.getElementById('current-qrcode');
@@ -592,6 +641,7 @@ function renderToolScripts(includeEditor = false) {
             }
 
             button.disabled = true; button.textContent = '保存中...';
+            
             fetch(window.location.href, {
                 method: 'POST',
                 body: JSON.stringify({ type: 'config', settings: {
@@ -606,12 +656,20 @@ function renderToolScripts(includeEditor = false) {
                 headers: { 'Content-Type': 'application/json' }
             }).then(function (res) {
                 if (!res.ok) throw new Error('HTTP ' + res.status);
-                statusElem.textContent = '已保存 ' + new Date().toLocaleString(); statusElem.style.color = '#2e7d32';
-                setTimeout(() => location.reload(), 800); 
-            }).catch(function (err) { statusElem.textContent = '保存失败: ' + err.message; statusElem.style.color = '#b00020'; })
+                return res.text();
+            }).then(function () {
+                statusElem.textContent = '已保存 ' + new Date().toLocaleString(); 
+                statusElem.style.color = 'var(--coral, #2e7d32)';
+                // 防止刷新过快导致 Load failed，等待 500ms
+                setTimeout(() => window.location.reload(), 500); 
+            }).catch(function (err) { 
+                statusElem.textContent = '保存失败: 网络异常或超时'; 
+                statusElem.style.color = '#c62828'; 
+                console.error(err);
+            })
             .finally(function () { 
                 button.disabled = false; 
-                button.textContent = button.id === 'saveSecBtn' ? '保存安全设置' : '保存全局设置'; 
+                button.textContent = button.id === 'saveSecBtn' ? '保存安全设置' : '保存全局设置并重载'; 
             });
         }
         function saveContent(button) {
@@ -619,13 +677,18 @@ function renderToolScripts(includeEditor = false) {
             if (!textarea) return;
             textarea.value = textarea.value.replace(/：/g, ':');
             button.disabled = true; button.textContent = '保存中...';
+            
             fetch(window.location.href, {
                 method: 'POST', body: JSON.stringify({ type: 'content', content: textarea.value || '' }),
                 headers: { 'Content-Type': 'application/json' }
             }).then(function (res) {
                 if (!res.ok) throw new Error('HTTP ' + res.status);
-                statusElem.textContent = '已保存 ' + new Date().toLocaleString(); statusElem.style.color = '#2e7d32';
-            }).catch(function (err) { statusElem.textContent = '保存失败: ' + err.message; statusElem.style.color = '#b00020'; })
+                statusElem.textContent = '已保存 ' + new Date().toLocaleString(); 
+                statusElem.style.color = '#2e7d32';
+            }).catch(function (err) { 
+                statusElem.textContent = '保存失败: 网络异常'; 
+                statusElem.style.color = '#c62828'; 
+            })
             .finally(function () { button.disabled = false; button.textContent = '保存节点订阅'; });
         }
         ` : ''}
@@ -633,9 +696,9 @@ function renderToolScripts(includeEditor = false) {
 }
 
 function renderLoginPage(url, error = '') {
-    return `<!DOCTYPE html><html><head><title>${escapeHTML(FileName)} 管理员登录</title><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${getToolStyles()}.login-btn { display: block; width: 100%; max-width: 280px; min-height: 44px; margin: 28px auto 6px; background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); border: none; border-radius: 12px; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.3s ease; } .login-btn:hover { background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%); box-shadow: 0 4px 12px rgba(29, 78, 216, 0.3); } .error { text-align: center; margin-top: 15px; }</style></head>
-    <body style="display:flex; justify-content:center; align-items:center; min-height:100vh;">
-    <main class="page" style="width: 100%; max-width: 420px; padding: 20px;">
+    return `<!DOCTYPE html><html><head><title>${escapeHTML(FileName)} 管理员登录</title><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${getToolStyles()}.login-btn { display: block; width: 100%; max-width: 280px; min-height: 44px; margin: 28px auto 6px; background: rgba(34, 34, 34, 0.85); border: 1px solid rgba(34, 34, 34, 0.2); border-radius: 12px; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.3s ease; } .login-btn:hover { background: rgba(34, 34, 34, 0.95); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15); } @media (prefers-color-scheme: dark) { .login-btn { background: #333; border-color: #555; } .login-btn:hover { background: #444; } } .error { text-align: center; margin-top: 15px; color: #c62828; }</style></head>
+    <body style="display:flex; justify-content:center; align-items:center; min-height:100vh; margin:0;">
+    <main class="page" style="width: 100%; max-width: 420px; padding: 20px; margin:0;">
         <section class="panel" style="padding: 30px 24px; text-align: center;">
             <h1 class="title" style="margin-bottom: 10px;">${escapeHTML(FileName)}</h1>
             <div class="subtitle" style="margin-bottom: 24px;">请登录管理员控制台</div>
@@ -649,24 +712,28 @@ function renderLoginPage(url, error = '') {
     </main></body></html>`;
 }
 
-function renderGuestPage(url, guest, displayApiUrl, displayConfig, apiOk, configOk, apiVersion) {
-    return `<!DOCTYPE html><html><head><title>${escapeHTML(FileName)} 访客订阅</title><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${getToolStyles()}</style><script src="https://cdn.jsdelivr.net/npm/@keeex/qrcodejs-kx@1.0.2/qrcode.min.js"></script></head><body><div id="copyNotice" class="toast"></div><main class="page"><header class="header"><h1 class="title">${escapeHTML(FileName)} 访客订阅</h1><div class="subtitle">复制订阅链接或生成二维码</div></header><section class="panel"><h2 class="section-title">订阅链接</h2>${renderLinkList(getSubscriptionLinks(url, guest, true))}</section>
+function renderGuestPage(url, guest, displayApiUrl, displayConfig, apiStatus, configStatus, apiVersion) {
+    let apiHtml = '';
+    if (apiStatus !== 'error') apiHtml = `✅SUBAPI状态正常${apiVersion ? ` (${escapeHTML(apiVersion)})` : ''}`;
+    else apiHtml = `❌SUBAPI失效 等待维护`;
+
+    let configHtml = '';
+    if (configStatus !== 'error') configHtml = `✅SUBCONFIG状态正常`;
+    else configHtml = `❌SUBCONFIG失效 等待维护`;
+
+    return `<!DOCTYPE html><html><head><title>${escapeHTML(FileName)} 访客订阅</title><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${getToolStyles()}</style><script src="https://cdn.jsdelivr.net/npm/@keeex/qrcodejs-kx@1.0.2/qrcode.min.js"></script></head><body><div id="copyNotice" class="toast"></div><main class="page"><header class="header"><h1 class="title">${escapeHTML(FileName)} 访客订阅</h1><div class="subtitle">复制订阅链接或生成二维码</div></header><section class="panel"><h2 class="section-title">订阅链接</h2>${renderLinkList(getSubscriptionLinks(url, guest))}</section>
     
     <section class="panel">
         <h2 class="section-title">订阅转换服务</h2>
         <div class="link-list">
             <div class="link-item">
                 <div class="link-label">订阅转换后端 SUBAPI</div>
-                <div class="status-indicator ${apiOk ? 'status-ok' : 'status-error'}">
-                    ${apiOk ? `✅SUBAPI状态正常${apiVersion ? ` (${escapeHTML(apiVersion)})` : ''}` : `❌SUBAPI失效 等待维护`}
-                </div>
+                <div class="status-indicator ${apiStatus !== 'error' ? 'status-ok' : 'status-error'}">${apiHtml}</div>
                 <a class="link-url" href="${escapeHTML(displayApiUrl)}" target="_blank">${escapeHTML(displayApiUrl)}</a>
             </div>
             <div class="link-item">
                 <div class="link-label">订阅转换规则 SUBCONFIG</div>
-                <div class="status-indicator ${configOk ? 'status-ok' : 'status-error'}">
-                    ${configOk ? `✅SUBCONFIG状态正常` : `❌SUBCONFIG失效 等待维护`}
-                </div>
+                <div class="status-indicator ${configStatus !== 'error' ? 'status-ok' : 'status-error'}">${configHtml}</div>
                 <a class="link-url" href="${escapeHTML(displayConfig)}" target="_blank">${escapeHTML(displayConfig)}</a>
             </div>
         </div>
@@ -674,8 +741,22 @@ function renderGuestPage(url, guest, displayApiUrl, displayConfig, apiOk, config
     <div id="current-qrcode"></div></main>${renderToolScripts(false)}</body></html>`;
 }
 
-function renderAdminPage(url, content, hasKV, guest, settings, apiOk, configOk, currentApi, currentConfig, apiVersion) {
-    return `<!DOCTYPE html><html><head><title>${escapeHTML(settings.subName)}</title><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${getToolStyles()}</style><script src="https://cdn.jsdelivr.net/npm/@keeex/qrcodejs-kx@1.0.2/qrcode.min.js"></script></head><body>
+function renderAdminPage(url, content, hasKV, settings, apiStatus, configStatus, currentApi, currentConfig, apiVersion) {
+    let adminApiHtml = '';
+    let apiCss = '';
+    if (apiStatus === 'ok') { adminApiHtml = `✅SUBAPI状态正常${apiVersion ? ` (${escapeHTML(apiVersion)})` : ''}`; apiCss = 'status-ok'; }
+    else if (apiStatus === 'default') { adminApiHtml = `✅SUBAPI已自动切换为默认 状态正常${apiVersion ? ` (${escapeHTML(apiVersion)})` : ''}`; apiCss = 'status-ok'; }
+    else if (apiStatus === 'warn') { adminApiHtml = `⚠️SUBAPI无效 请留空或填写正确 已切换为默认配置`; apiCss = 'status-warn'; }
+    else { adminApiHtml = `❌SUBAPI失效 等待维护`; apiCss = 'status-error'; }
+
+    let adminConfigHtml = '';
+    let configCss = '';
+    if (configStatus === 'ok') { adminConfigHtml = `✅SUBCONFIG状态正常`; configCss = 'status-ok'; }
+    else if (configStatus === 'default') { adminConfigHtml = `✅SUBCONFIG已自动切换为默认 状态正常`; configCss = 'status-ok'; }
+    else if (configStatus === 'warn') { adminConfigHtml = `⚠️SUBCONFIG无效 请留空或填写正确 已切换为默认配置`; configCss = 'status-warn'; }
+    else { adminConfigHtml = `❌SUBCONFIG失效 等待维护`; configCss = 'status-error'; }
+
+    return `<!DOCTYPE html><html><head><title>${escapeHTML(settings.subName)} - 控制台</title><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${getToolStyles()}</style><script src="https://cdn.jsdelivr.net/npm/@keeex/qrcodejs-kx@1.0.2/qrcode.min.js"></script></head><body>
     <div id="copyNotice" class="toast"></div>
     
     <div id="securityModal" class="modal-overlay">
@@ -687,19 +768,22 @@ function renderAdminPage(url, content, hasKV, guest, settings, apiOk, configOk, 
             <div class="field"><label>确认登录密码</label><input id="sec-pass2" type="password" value="${escapeHTML(settings.pass || '')}" placeholder="再次输入密码"></div>
             <div class="actions" style="margin-top: 24px; justify-content: flex-end;">
                 <button type="button" class="secondary" onclick="closeSecurityModal()">取消</button>
-                <button type="button" id="saveSecBtn" onclick="saveConfig(this)">保存安全设置</button>
+                <button type="button" id="saveSecBtn" onclick="saveConfig(this)">保存修改</button>
             </div>
             <span id="secSaveStatus" class="muted" style="display:block; text-align:right; margin-top:8px;"></span>
         </div>
     </div>
 
     <main class="page">
-    <header class="header" style="display: flex; justify-content: space-between; align-items: center;">
+    <header class="header" style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px;">
         <div>
             <h1 class="title">${escapeHTML(settings.subName)}</h1>
             <div class="subtitle">汇聚订阅控制台</div>
         </div>
-        ${hasKV ? `<button type="button" style="background: rgba(34, 34, 34, 0.8);" onclick="openSecurityModal()">🛡️ 安全设置</button>` : ''}
+        <div style="display:flex; gap:8px;">
+            ${hasKV ? `<button type="button" style="background: rgba(34, 34, 34, 0.8);" onclick="openSecurityModal()">🛡️ 安全设置</button>` : ''}
+            <button type="button" class="danger" onclick="window.location.href='?logout=1'">🚪 退出</button>
+        </div>
     </header>
 
     <section class="panel">
@@ -711,9 +795,7 @@ function renderAdminPage(url, content, hasKV, guest, settings, apiOk, configOk, 
         <h2 class="section-title">订阅转换后端 SUBAPI</h2>
         <div class="field">
             <input id="config-subapi" type="text" value="${escapeHTML(settings.subApi)}" placeholder="例如：SUBAPI.cmliussss.net">
-            <div class="status-indicator ${apiOk ? 'status-ok' : 'status-error'}" style="margin-top: 8px;">
-                ${apiOk ? `✅SUBAPI状态正常${apiVersion ? ` (${escapeHTML(apiVersion)})` : ''}` : `❌SUBAPI失效 等待维护`}
-            </div>
+            <div class="status-indicator ${apiCss}" style="margin-top: 8px;">${adminApiHtml}</div>
             <a class="link-url" href="${escapeHTML(currentApi)}" target="_blank" style="margin-top: 8px; display: block;">${escapeHTML(currentApi)}</a>
         </div>
     </section>
@@ -722,9 +804,7 @@ function renderAdminPage(url, content, hasKV, guest, settings, apiOk, configOk, 
         <h2 class="section-title">订阅转换规则 SUBCONFIG</h2>
         <div class="field">
             <textarea id="config-subconfig" style="min-height:80px">${escapeHTML(settings.subConfig)}</textarea>
-            <div class="status-indicator ${configOk ? 'status-ok' : 'status-error'}" style="margin-top: 8px;">
-                ${configOk ? `✅SUBCONFIG状态正常` : `❌SUBCONFIG失效 等待维护`}
-            </div>
+            <div class="status-indicator ${configCss}" style="margin-top: 8px;">${adminConfigHtml}</div>
             <a class="link-url" href="${escapeHTML(currentConfig)}" target="_blank" style="margin-top: 8px; display: block;">${escapeHTML(currentConfig)}</a>
         </div>
     </section>
@@ -739,11 +819,13 @@ function renderAdminPage(url, content, hasKV, guest, settings, apiOk, configOk, 
     </section>
 
     <section class="panel"><h2 class="section-title">汇聚订阅节点编辑</h2>${hasKV ? `<textarea id="content" placeholder="在此输入单节点链接或订阅地址...">${escapeHTML(content)}</textarea><div class="actions"><button type="button" onclick="saveContent(this)">保存节点订阅</button><span id="saveStatus" class="muted"></span></div>` : '<p class="muted">请绑定变量名称为 KV 的 KV 命名空间</p>'}</section>
-    <section class="panel"><h2 class="section-title">管理员订阅链接</h2>${renderLinkList(getSubscriptionLinks(url, mytoken, false))}</section>
+    
+    <section class="panel"><h2 class="section-title">管理员直接订阅链接</h2>${renderLinkList(getSubscriptionLinks(url, mytoken))}</section>
+    
     <div id="current-qrcode"></div></main>${renderToolScripts(true)}</body></html>`;
 }
 
-async function KV(request, env, txt, guest, apiOk, configOk, currentApi, currentConfig, apiVersion) {
+async function KV(request, env, txt, guest, apiStatus, configStatus, currentApiUrl, currentConfigUrl, apiVersion) {
     let settings = { subName: 'CF-SUB', subApi: '', subConfig: '', noAds: '', guest: '', user: '', pass: '' };
     let hasKV = !!env.KV;
     
@@ -759,9 +841,7 @@ async function KV(request, env, txt, guest, apiOk, configOk, currentApi, current
             if (!hasKV) return new Response("未绑定KV空间", { status: 400 });
             
             const contentType = request.headers.get('content-type') || '';
-            if (contentType.includes('application/x-www-form-urlencoded')) {
-                return Response.redirect(request.url, 302);
-            }
+            if (contentType.includes('application/x-www-form-urlencoded')) return Response.redirect(request.url, 302);
 
             const text = await request.text();
             try {
@@ -774,19 +854,15 @@ async function KV(request, env, txt, guest, apiOk, configOk, currentApi, current
                     await env.KV.put(txt, data.content || ''); 
                     return new Response("订阅保存成功"); 
                 }
-            } catch (jsonErr) { 
-                return new Response("不支持的数据格式", { status: 400 }); 
-            }
+            } catch (jsonErr) { return new Response("不支持的数据格式", { status: 400 }); }
         }
         
         let content = '';
         if (hasKV) try { content = await env.KV.get(txt) || ''; } catch (error) { content = '读取数据时发生错误'; }
         
         return new Response(
-            renderAdminPage(new URL(request.url), content, hasKV, guest, settings, apiOk, configOk, currentApi, currentConfig, apiVersion), 
+            renderAdminPage(new URL(request.url), content, hasKV, settings, apiStatus, configStatus, currentApiUrl, currentConfigUrl, apiVersion), 
             { headers: { "Content-Type": "text/html;charset=utf-8" } }
         );
-    } catch (error) { 
-        return new Response("服务器错误: " + error.message, { status: 500 }); 
-    }
+    } catch (error) { return new Response("服务器错误: " + error.message, { status: 500 }); }
 }
