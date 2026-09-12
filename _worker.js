@@ -20,27 +20,26 @@ export default {
       SUBAPI: 'SUBAPI.cmliussss.net',
       SUBCONFIG: 'https://raw.githubusercontent.com/cmliu/ACL4SSR/main/Clash/config/ACL4SSR_Online_Full_MultiMode.ini',
       NOADS: '加入TG群, 关注YouTube频道, http://',
-      LINKS: env.LINK || '' // 兜底读取环境变量中的旧节点
+      LINKS: env.LINK || ''
     };
 
-    // 从 KV 中读取用户动态配置 (完美兼容旧版数据格式)
+    // 从 KV 中读取用户动态配置 (智能合并旧版格式并强制去空格防呆)
     if (env.KV) {
       try {
-        // 原版项目通常将数据存在以 TOKEN 命名的键值中
-        const kvStr = await env.KV.get(TOKEN);
+        // 优先读取新版专属键名，没有则读取原版的 TOKEN 键名
+        let kvStr = await env.KV.get('CF_SUB_CONFIG') || await env.KV.get(TOKEN);
         if (kvStr) {
           const kvConf = JSON.parse(kvStr);
-          config.GUEST = kvConf.GUEST !== undefined ? kvConf.GUEST : config.GUEST;
-          config.USER = kvConf.USER !== undefined ? kvConf.USER : config.USER;
-          config.PASS = kvConf.PASS !== undefined ? kvConf.PASS : config.PASS;
           
-          // 兼容原版旧格式的小驼峰命名 (subName, subApi等)
+          // 强制转为字符串并剔除前后看不见的空格，彻底杜绝因为多一个空格导致无法登录的问题
+          config.GUEST = String(kvConf.GUEST !== undefined ? kvConf.GUEST : config.GUEST).trim();
+          config.USER = String(kvConf.USER !== undefined ? kvConf.USER : config.USER).trim();
+          config.PASS = String(kvConf.PASS !== undefined ? kvConf.PASS : config.PASS).trim();
+          
           config.SUBNAME = kvConf.SUBNAME || kvConf.subName || config.SUBNAME;
           config.SUBAPI = kvConf.SUBAPI || kvConf.subApi || config.SUBAPI;
           config.SUBCONFIG = kvConf.SUBCONFIG || kvConf.subConfig || config.SUBCONFIG;
           config.NOADS = kvConf.NOADS !== undefined ? kvConf.NOADS : (kvConf.noAds !== undefined ? kvConf.noAds : config.NOADS);
-          
-          // 读取节点列表
           config.LINKS = kvConf.LINKS !== undefined ? kvConf.LINKS : config.LINKS;
         }
       } catch (e) {
@@ -56,13 +55,53 @@ export default {
       // 浏览器访问 -> 弹出系统登录框 -> 加载可视化后台
       if (!isSubRequest) {
         const auth = request.headers.get('Authorization');
-        const expectedAuth = 'Basic ' + btoa(`${config.USER}:${config.PASS}`);
+        let isAuthorized = false;
+
+        // 精准解析浏览器发来的 Basic Auth 凭证
+        if (auth && auth.startsWith('Basic ')) {
+          try {
+            const decoded = atob(auth.slice(6));
+            const colonIndex = decoded.indexOf(':');
+            if (colonIndex !== -1) {
+              const reqUser = decoded.slice(0, colonIndex);
+              const reqPass = decoded.slice(colonIndex + 1);
+              if (reqUser === config.USER && reqPass === config.PASS) {
+                isAuthorized = true;
+              }
+            }
+          } catch(e) {}
+        }
         
-        // 浏览器 Basic Auth 鉴权
-        if (auth !== expectedAuth) {
-          return new Response('Unauthorized', {
+        // 鉴权失败：如果弹窗取消，展示明确的排错提示页面
+        if (!isAuthorized) {
+          return new Response(`<!DOCTYPE html>
+            <html lang="zh-CN">
+            <head>
+              <meta charset="UTF-8">
+              <meta name="viewport" content="width=device-width, initial-scale=1.0">
+              <title>鉴权失败</title>
+              <style>
+                body { font-family: system-ui, sans-serif; background: #f8f9fa; color: #333; text-align: center; padding: 50px 20px; }
+                .card { max-width: 500px; margin: 0 auto; background: #fff; padding: 30px; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
+                h2 { color: #dc3545; }
+              </style>
+            </head>
+            <body>
+              <div class="card">
+                <h2>登录失败 (Unauthorized)</h2>
+                <p>如果你一直卡在弹窗循环，说明你输入的密码和系统保存的不一致。</p>
+                <hr>
+                <p>系统当前认定的后台账号 (USER) 是：<br><b style="font-size:24px; color:#007bff;">${config.USER}</b></p>
+                <p>如果你确定密码不对或忘记了，请去 Cloudflare 面板的 <b>KV 命名空间</b> 里面，把 <b>${TOKEN}</b> 和 <b>CF_SUB_CONFIG</b> 这两个键（Key）删掉！</p>
+                <p>删掉后刷新页面，即可用默认账号 <b>admin</b> 和密码 <b>123456</b> 重新登录系统并设置新密码。</p>
+              </div>
+            </body>
+            </html>`, {
             status: 401,
-            headers: { 'WWW-Authenticate': 'Basic realm="CF-SUB Admin System"' }
+            headers: { 
+              'WWW-Authenticate': 'Basic realm="CF-SUB Admin System"',
+              'Content-Type': 'text/html; charset=utf-8' 
+            }
           });
         }
 
@@ -81,8 +120,7 @@ export default {
               LINKS: formData.get('LINKS') || ''
             };
             if (env.KV) {
-              // 统一存入以 TOKEN 为键名的空间中
-              await env.KV.put(TOKEN, JSON.stringify(newConf));
+              await env.KV.put('CF_SUB_CONFIG', JSON.stringify(newConf));
               return new Response('Success', { status: 200 });
             } else {
               return new Response('未绑定KV空间，无法保存！', { status: 500 });
@@ -110,7 +148,7 @@ export default {
     // 路由 3: 根目录、错误路径或探测请求 -> 返回防探测主页
     else {
       return new Response(getFakeHTML(), {
-        status: 200, // 保持200状态码，让扫描器认为是正常页面
+        status: 200, 
         headers: { 'Content-Type': 'text/html; charset=utf-8' }
       });
     }
@@ -150,7 +188,6 @@ async function getFilteredNodes(linksStr, noadsStr) {
   const lines = linksStr.split(/\r?\n/);
   let nodes = [];
   
-  // 1. 汇聚并解析远端订阅链接
   for (let line of lines) {
     line = line.trim();
     if (!line) continue;
@@ -160,7 +197,6 @@ async function getFilteredNodes(linksStr, noadsStr) {
         if (res.ok) {
           let text = (await res.text()).trim();
           let decoded = text;
-          // 如果远端返回的是 Base64 格式，进行解码
           if (!text.includes('://') && !text.includes('\n')) {
             let b64 = text.replace(/-/g, '+').replace(/_/g, '/');
             try { decoded = decodeURIComponent(escape(atob(b64))); } catch (e) { decoded = text; }
@@ -178,13 +214,11 @@ async function getFilteredNodes(linksStr, noadsStr) {
     }
   }
 
-  // 2. 核心去广告逻辑 (NOADS)
   let noads = noadsStr.split(/,|\n/).map(s => s.trim()).filter(s => s.length > 0);
   let validNodes = [];
   for (let node of nodes) {
     let hasAd = false;
     for (let ad of noads) {
-      // 简单安全解码以比对含有 url encoding 的节点名
       let decodedNode = node;
       try { decodedNode = decodeURIComponent(node); } catch(e) {}
       if (decodedNode.includes(ad) || node.includes(ad)) {
@@ -203,14 +237,12 @@ async function getFilteredNodes(linksStr, noadsStr) {
 async function handleSubscription(request, url, config, TOKEN) {
   const target = getTarget(request, url);
 
-  // 如果请求基础 Base64 或兜底目标
   if (target === 'b64' || url.searchParams.has('b64')) {
     const validNodes = await getFilteredNodes(config.LINKS, config.NOADS);
     const b64 = btoa(unescape(encodeURIComponent(validNodes.join('\n'))));
     return new Response(b64, { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
   }
 
-  // 构建转换请求，巧妙地让转换后端来拉取我们刚刚生成的纯净 Base64 链接
   const subUrl = `${url.origin}/${TOKEN}?b64`;
   const subconverterUrl = `https://${config.SUBAPI}/sub?target=${target}&url=${encodeURIComponent(subUrl)}&insert=false&config=${encodeURIComponent(config.SUBCONFIG)}&emoji=true&list=false&tfo=false&scv=true&fdn=false&sort=false&name=${encodeURIComponent(config.SUBNAME)}`;
 
@@ -220,7 +252,6 @@ async function handleSubscription(request, url, config, TOKEN) {
     });
     if (!res.ok) throw new Error('转换后端请求失败');
     
-    // 直接返回转换后端生成好的配置文件
     return new Response(await res.text(), {
       headers: {
         'Content-Type': res.headers.get('Content-Type') || 'text/plain; charset=utf-8',
@@ -228,7 +259,6 @@ async function handleSubscription(request, url, config, TOKEN) {
       }
     });
   } catch (e) {
-    // 智能容灾回退：如果高级转换后端挂了，直接退回下发 Base64
     const validNodes = await getFilteredNodes(config.LINKS, config.NOADS);
     const b64 = btoa(unescape(encodeURIComponent(validNodes.join('\n'))));
     return new Response(b64, { headers: { 'Content-Type': 'text/plain; charset=utf-8' } });
@@ -272,42 +302,42 @@ function getAdminHTML(config, TOKEN, baseUrl) {
       <div style="display:flex; gap:15px; margin-bottom:20px;">
         <div style="flex:1;">
           <label>后台账号 (USER)</label>
-          <input type="text" name="USER" value="${config.USER || 'admin'}">
+          <input type="text" name="USER" value="${config.USER}">
         </div>
         <div style="flex:1;">
           <label>后台密码 (PASS)</label>
-          <input type="text" name="PASS" value="${config.PASS || '123456'}">
+          <input type="text" name="PASS" value="${config.PASS}">
         </div>
       </div>
 
       <div class="form-group">
         <label>访客入口 TOKEN (GUEST)</label>
-        <input type="text" name="GUEST" value="${config.GUEST || ''}" placeholder="例如: guest123，留空则不开启独立访客入口">
+        <input type="text" name="GUEST" value="${config.GUEST}" placeholder="例如: guest123，留空则不开启独立访客入口">
       </div>
 
       <div class="form-group">
         <label>站点与订阅名称 (SUBNAME)</label>
-        <input type="text" name="SUBNAME" value="${config.SUBNAME || 'CF-SUB'}">
+        <input type="text" name="SUBNAME" value="${config.SUBNAME}">
       </div>
 
       <div class="form-group">
         <label>订阅转换后端 (SUBAPI)</label>
-        <input type="text" name="SUBAPI" value="${config.SUBAPI || 'SUBAPI.cmliussss.net'}">
+        <input type="text" name="SUBAPI" value="${config.SUBAPI}">
       </div>
 
       <div class="form-group">
         <label>转换分流规则 (SUBCONFIG)</label>
-        <input type="text" name="SUBCONFIG" value="${config.SUBCONFIG || 'https://raw.githubusercontent.com/cmliu/ACL4SSR/main/Clash/config/ACL4SSR_Online_Full_MultiMode.ini'}">
+        <input type="text" name="SUBCONFIG" value="${config.SUBCONFIG}">
       </div>
 
       <div class="form-group">
         <label>去广告与屏蔽关键字 (NOADS) - 逗号或换行分隔</label>
-        <textarea name="NOADS" placeholder="加入TG群, 关注YouTube频道">${config.NOADS || ''}</textarea>
+        <textarea name="NOADS" placeholder="加入TG群, 关注YouTube频道">${config.NOADS}</textarea>
       </div>
 
       <div class="form-group">
         <label>汇聚节点与订阅链接 (每行一个，支持直连节点与机场订阅)</label>
-        <textarea name="LINKS" placeholder="vmess://...\nvless://...\nhttps://机场订阅链接.com/sub">${config.LINKS || ''}</textarea>
+        <textarea name="LINKS" placeholder="vmess://...\nvless://...\nhttps://机场订阅链接.com/sub">${config.LINKS}</textarea>
       </div>
 
       <button type="submit">保存至 KV 数据库</button>
