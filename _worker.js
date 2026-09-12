@@ -444,13 +444,28 @@ async function nginx(titleName) {
             background: var(--paper);
             border: 1px solid var(--border);
             border-radius: 20px;
-            overflow-x: auto; /* 核心：移动端横向滚动 */
             margin-bottom: 50px;
-            -webkit-overflow-scrolling: touch;
+            overflow: hidden; /* 去掉 auto，防止外部出现滚动条 */
         }
 
-        table { width: 100%; border-collapse: collapse; min-width: 600px; }
-        th, td { padding: 18px 24px; text-align: left; border-bottom: 1px solid var(--border); font-size: 15px;}
+        table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            table-layout: fixed; /* 固定布局，方便内容按比例自动换行压缩 */
+        }
+        
+        th, td { 
+            padding: 18px 20px; 
+            text-align: left; 
+            border-bottom: 1px solid var(--border); 
+            font-size: 15px;
+            word-wrap: break-word; /* 允许长内容换行 */
+        }
+        
+        th:nth-child(1), td:nth-child(1) { width: 50%; } /* 给第一列分配更多空间 */
+        th:nth-child(2), td:nth-child(2) { width: 22%; }
+        th:nth-child(3), td:nth-child(3) { width: 28%; }
+        
         th { font-weight: 600; color: var(--muted); background: rgba(0,0,0,0.01); }
         @media (prefers-color-scheme: dark) { th { background: rgba(255,255,255,0.02); } }
         tr:last-child td { border-bottom: none; }
@@ -515,6 +530,16 @@ async function nginx(titleName) {
             .container { padding: 20px 16px; }
             .hero { padding: 40px 24px; border-radius: 20px; margin-bottom: 40px;}
             .card.featured { transform: none; box-shadow: none; }
+            
+            /* 表格移动端极限压缩，保证不出现横向滚动条 */
+            .table-wrapper { border-radius: 16px; margin-bottom: 40px; }
+            th, td { padding: 12px 10px; font-size: 13px; line-height: 1.3;}
+            .price { font-size: 14px; }
+            .space { font-size: 12px; }
+            th:nth-child(1), td:nth-child(1) { width: 44%; } 
+            th:nth-child(2), td:nth-child(2) { width: 25%; }
+            th:nth-child(3), td:nth-child(3) { width: 31%; }
+
             .contact { flex-direction: column; text-align: center; padding: 30px 20px; }
             .btn { width: 100%; text-align: center; }
         }
