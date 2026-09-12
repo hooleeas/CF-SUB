@@ -82,10 +82,29 @@ export default {
         if (!([mytoken, fakeToken, 访客订阅].includes(token) || url.pathname == ("/" + mytoken) || url.pathname.includes("/" + mytoken + "?") || guestPath)) {
             if (env.URL302) return Response.redirect(env.URL302, 302);
             else if (env.URL) return await proxyURL(env.URL, url);
-            else return new Response(await nginx(FileName), { // 这里传入了动态的 FileName
-                status: 200,
-                headers: { 'Content-Type': 'text/html; charset=UTF-8' },
-            });
+            else {
+                // 优先尝试读取 Pages 同目录下的 index.html 用于正规页面渲染
+                if (env.ASSETS) {
+                    try {
+                        let assetRes = await env.ASSETS.fetch(new Request(url.origin + '/index.html', request));
+                        if (assetRes.status === 200) {
+                            let html = await assetRes.text();
+                            html = html.replace(/<title>.*?<\/title>/i, `<title>${escapeHTML(FileName)}</title>`);
+                            return new Response(html, {
+                                status: 200,
+                                headers: { 'Content-Type': 'text/html; charset=UTF-8' }
+                            });
+                        }
+                    } catch (e) {
+                        // 忽略错误，降级使用原生 nginx 输出
+                    }
+                }
+                // CF Workers 部署无 index.html 或读取失败时兜底
+                return new Response(await nginx(FileName), { 
+                    status: 200,
+                    headers: { 'Content-Type': 'text/html; charset=UTF-8' },
+                });
+            }
         } else {
             if (env.KV) {
                 await 迁移地址列表(env, 'LINK.txt');
@@ -95,12 +114,17 @@ export default {
                     // 进行后端探针检测 (避免超时导致卡顿，设1.5秒限制)
                     let apiOk = true;
                     let configOk = true;
+                    let apiVersion = '';
                     
                     try {
                         const controller = new AbortController();
                         const timeout = setTimeout(() => controller.abort(), 1500);
                         const resApi = await fetch(`${subProtocol}://${subConverter}/version`, { signal: controller.signal });
                         apiOk = resApi.ok;
+                        if (apiOk) {
+                            const text = await resApi.text();
+                            apiVersion = text.trim().substring(0, 30); // 截取核心版本号
+                        }
                         clearTimeout(timeout);
                     } catch (e) { apiOk = false; }
 
@@ -112,12 +136,14 @@ export default {
                         clearTimeout(timeout);
                     } catch (e) { configOk = false; }
 
+                    const displayApi = apiOk ? subConverter : defaultSubConverter;
+                    const displayProtocol = apiOk ? subProtocol : defaultSubProtocol;
+                    const displayConfig = configOk ? subConfig : defaultSubConfig;
+                    const currentApiUrl = `${displayProtocol}://${displayApi}`;
+
                     if (guestPath) {
-                        // 访客访问：展示实际工作的配置
-                        const displayApi = apiOk ? subConverter : defaultSubConverter;
-                        const displayProtocol = apiOk ? subProtocol : defaultSubProtocol;
-                        const displayConfig = configOk ? subConfig : defaultSubConfig;
-                        return new Response(renderGuestPage(url, 访客订阅, `${displayProtocol}://${displayApi}`, displayConfig), { headers: { 'Content-Type': 'text/html;charset=utf-8' } });
+                        // 访客访问
+                        return new Response(renderGuestPage(url, 访客订阅, currentApiUrl, displayConfig, apiOk, configOk, apiVersion), { headers: { 'Content-Type': 'text/html;charset=utf-8' } });
                     } else {
                         if (isAdminLoginEnabled(adminUser, adminPass)) {
                             const isLoggedIn = await isAdminLoggedIn(request, mytoken, adminUser, adminPass);
@@ -127,7 +153,7 @@ export default {
                             }
                         }
                         // 管理员访问
-                        return await KV(request, env, 'LINK.txt', 访客订阅, apiOk, configOk, subConverter, subConfig);
+                        return await KV(request, env, 'LINK.txt', 访客订阅, apiOk, configOk, currentApiUrl, displayConfig, apiVersion);
                     }
                 } else {
                     MainData = await env.KV.get('LINK.txt') || MainData;
@@ -195,11 +221,11 @@ export default {
             const utf8Encoder = new TextEncoder();
             const text = new TextDecoder().decode(utf8Encoder.encode(req_data));
 
-            // 去广告过滤
+            // 去广告过滤 (支持英文逗号、空格、换行分隔)
             let adKeywords = [];
             let filteredLines = text.split('\n');
             if (config_noAds) {
-                adKeywords = config_noAds.split(/,|\r?\n/).map(k => k.trim().toLowerCase()).filter(k => k.length > 0);
+                adKeywords = config_noAds.split(/[, \r\n]+/).map(k => k.trim().toLowerCase()).filter(k => k.length > 0);
                 if (adKeywords.length > 0) {
                     filteredLines = filteredLines.filter(line => {
                         const lowerLine = line.toLowerCase();
@@ -286,208 +312,33 @@ async function ADD(envadd) {
     return add;
 }
 
-// ================== Apple 拼车业务防探测主页 ==================
+// ================== 原生 Nginx 页面兜底 ==================
 async function nginx(titleName) {
-    const text = `
-<!DOCTYPE html>
-<html lang="zh-CN">
+    return `<!DOCTYPE html>
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-    <title>${escapeHTML(titleName)}</title> 
-    <meta name="description" content="Apple One、iCloud+ 与 Apple Creator Studio 家庭订阅共享，长期稳定，按月续费。">
-    <meta name="keywords" content="Apple One, iCloud+, Apple Creator Studio, 家庭订阅, 订阅拼车">
-    <style>
-        :root {
-            --bg: #f5f5f7;
-            --text: #1d1d1f;
-            --muted: #86868b;
-            --coral: #ef684f;
-            --coral-hover: #d9543d;
-            --yellow: #f5c95b;
-            --paper: #ffffff;
-            --border: #e5e5ea;
-        }
-
-        @media (prefers-color-scheme: dark) {
-            :root {
-                --bg: #000000;
-                --text: #f5f5f7;
-                --muted: #86868b;
-                --paper: #1c1c1e;
-                --border: #333336;
-            }
-        }
-
-        * { box-sizing: border-box; }
-
-        body {
-            margin: 0;
-            padding: 0;
-            background-color: var(--bg);
-            color: var(--text);
-            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "Segoe UI", "PingFang SC", "Helvetica Neue", sans-serif;
-            -webkit-font-smoothing: antialiased;
-            line-height: 1.5;
-        }
-
-        .container { max-width: 1080px; margin: 0 auto; padding: 40px 20px; }
-
-        /* Hero Section */
-        .hero {
-            background: linear-gradient(135deg, #fff7e8 0%, #ffe8dc 50%, #f7d8c9 100%);
-            border-radius: 24px;
-            padding: 60px 40px;
-            margin-bottom: 50px;
-            position: relative;
-            overflow: hidden;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.02);
-        }
-
-        @media (prefers-color-scheme: dark) {
-            .hero {
-                background: linear-gradient(135deg, #2d2422 0%, #2c2122 50%, #2a2222 100%);
-                box-shadow: inset 0 0 0 1px rgba(255,255,255,0.05);
-            }
-        }
-
-        .kicker { color: var(--coral); font-size: 13px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 16px; display: block; }
-        .hero h1 { font-size: clamp(32px, 5vw, 56px); margin: 0 0 16px; line-height: 1.1; letter-spacing: -0.02em; }
-        .hero h1 strong { color: var(--coral); }
-        .hero p { font-size: clamp(16px, 2.5vw, 18px); color: #5c514c; max-width: 600px; margin: 0; line-height: 1.6; }
-
-        @media (prefers-color-scheme: dark) { .hero p { color: #a19b98; } }
-
-        /* Section Titles */
-        .section-title { font-size: 28px; margin: 0 0 24px; letter-spacing: -0.01em; }
-        .section-title span { display: block; color: var(--coral); font-size: 12px; font-weight: 700; letter-spacing: 0.1em; text-transform: uppercase; margin-bottom: 8px; }
-
-        /* Grid Cards */
-        .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(300px, 1fr)); gap: 20px; margin-bottom: 50px; }
-        .card { background: var(--paper); border: 1px solid var(--border); border-radius: 20px; padding: 30px; transition: transform 0.2s ease, box-shadow 0.2s ease; }
-        .card.featured { border-color: var(--coral); background: rgba(239, 104, 79, 0.03); transform: translateY(-4px); box-shadow: 0 12px 40px rgba(239, 104, 79, 0.08); }
-        .tag { background: var(--yellow); color: #533b13; font-size: 11px; font-weight: 800; padding: 6px 10px; border-radius: 6px; display: inline-block; margin-bottom: 20px; }
-        .card h3 { margin: 0 0 12px; font-size: 22px; }
-        .card p { color: var(--muted); font-size: 15px; margin: 0 0 20px; line-height: 1.6; min-height: 48px;}
-        .card ul { list-style: none; padding: 0; margin: 0; }
-        .card li { margin-bottom: 10px; font-size: 15px; display: flex; align-items: center; }
-        .card li::before { content: "✓"; color: var(--coral); font-weight: 800; margin-right: 12px; font-size: 16px;}
-
-        /* Table */
-        .table-wrapper { background: var(--paper); border: 1px solid var(--border); border-radius: 20px; margin-bottom: 50px; overflow: hidden; }
-        table { width: 100%; border-collapse: collapse; table-layout: fixed; }
-        th, td { padding: 18px 20px; text-align: left; border-bottom: 1px solid var(--border); font-size: 15px; word-wrap: break-word; }
-        th:nth-child(1), td:nth-child(1) { width: 50%; } 
-        th:nth-child(2), td:nth-child(2) { width: 22%; }
-        th:nth-child(3), td:nth-child(3) { width: 28%; }
-        th { font-weight: 600; color: var(--muted); background: rgba(0,0,0,0.01); }
-        @media (prefers-color-scheme: dark) { th { background: rgba(255,255,255,0.02); } }
-        tr:last-child td { border-bottom: none; }
-        .price { color: var(--coral); font-weight: 700; font-size: 17px; }
-        .space { color: var(--muted); font-size: 14px; }
-
-        /* Steps */
-        .steps { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 30px; margin-bottom: 60px; }
-        .step { padding-top: 20px; border-top: 2px solid var(--yellow); }
-        .step b { color: var(--coral); font-size: 12px; display: block; margin-bottom: 10px; letter-spacing: 0.1em;}
-        .step h4 { margin: 0 0 10px; font-size: 19px; }
-        .step p { margin: 0; color: var(--muted); font-size: 15px; line-height: 1.6;}
-
-        /* Contact Box */
-        .contact { background: #1c1c1e; color: #fff; padding: 36px 40px; border-radius: 24px; display: flex; justify-content: space-between; align-items: center; gap: 20px; }
-        @media (prefers-color-scheme: dark) { .contact { background: #2c2c2e; } }
-        .contact-info h2 { margin: 0 0 8px; font-size: 24px; }
-        .contact-info p { margin: 0; color: #a1a1a6; font-size: 15px; }
-        .btn { background: var(--coral); color: #fff; text-decoration: none; padding: 14px 28px; border-radius: 12px; font-weight: 600; font-size: 15px; white-space: nowrap; transition: transform 0.2s ease, background 0.2s ease; display: inline-block; }
-        .btn:hover { background: var(--coral-hover); transform: scale(0.98); }
-        .footer-note { text-align: center; color: var(--muted); font-size: 13px; margin-top: 24px; }
-
-        /* Mobile Adjustments */
-        @media (max-width: 768px) {
-            .container { padding: 20px 16px; }
-            .hero { padding: 40px 24px; border-radius: 20px; margin-bottom: 40px;}
-            .card.featured { transform: none; box-shadow: none; }
-            .table-wrapper { border-radius: 16px; margin-bottom: 40px; }
-            th, td { padding: 12px 10px; font-size: 13px; line-height: 1.3;}
-            .price { font-size: 14px; }
-            .space { font-size: 12px; }
-            th:nth-child(1), td:nth-child(1) { width: 44%; } 
-            th:nth-child(2), td:nth-child(2) { width: 25%; }
-            th:nth-child(3), td:nth-child(3) { width: 31%; }
-            .contact { flex-direction: column; text-align: center; padding: 30px 20px; }
-            .btn { width: 100%; text-align: center; }
-        }
-    </style>
+<title>${escapeHTML(titleName)}</title>
+<style>
+    body {
+        width: 35em;
+        margin: 0 auto;
+        font-family: Tahoma, Verdana, Arial, sans-serif;
+    }
+</style>
 </head>
 <body>
-    <div class="container">
-      <section class="hero">
-        <span class="kicker">Apple subscription sharing</span>
-        <h1>把常用的 Apple 服务，<br><strong>用更舒服的方式订阅。</strong></h1>
-        <p>Apple One、iCloud+ 与 Apple Creator Studio 家庭订阅共享。长期稳定，按月续费，适合想省心使用 Apple 生态服务的你。</p>
-      </section>
+<h1>Welcome to nginx!</h1>
+<p>If you see this page, the nginx web server is successfully installed and
+working. Further configuration is required.</p>
 
-      <h2 class="section-title"><span>Choose your service</span>按需选择，不为用不到的功能买单</h2>
-      <div class="grid">
-        <article class="card featured">
-          <span class="tag">热门选择</span>
-          <h3>Apple One</h3>
-          <p>把音乐、影视、游戏和云空间整合到一个家庭订阅中。</p>
-          <ul><li>Apple Music</li><li>Apple TV+</li><li>Apple Arcade</li><li>iCloud+ 空间</li></ul>
-        </article>
-        <article class="card">
-          <span class="tag">云空间</span>
-          <h3>iCloud+</h3>
-          <p>给照片、文件和设备备份留出更充足的空间，跨设备保持同步。</p>
-          <ul><li>独立家庭成员席位</li><li>适合长期稳定使用</li><li>按月续费更灵活</li></ul>
-        </article>
-        <article class="card">
-          <span class="tag">创作工具</span>
-          <h3>Apple Creator Studio</h3>
-          <p>面向创作者的 Apple 应用套装，适合视频、音乐和内容创作需求。</p>
-          <ul><li>家庭订阅共享</li><li>按需加入或续费</li><li>使用问题可咨询</li></ul>
-        </article>
-      </div>
+<p>For online documentation and support please refer to
+<a href="http://nginx.org/">nginx.org</a>.<br/>
+Commercial support is available at
+<a href="http://nginx.com/">nginx.com</a>.</p>
 
-      <h2 class="section-title"><span>Pricing plans</span>常见套餐与价格</h2>
-      <div class="table-wrapper">
-          <table>
-            <thead>
-              <tr><th>订阅组合</th><th>每月定价</th><th>个人 iCloud 空间</th></tr>
-            </thead>
-            <tbody>
-              <tr><td>Apple One</td><td><span class="price">¥6</span></td><td><span class="space">40 GB</span></td></tr>
-              <tr><td>iCloud+ (2TB)</td><td><span class="price">¥13</span></td><td><span class="space">400 GB</span></td></tr>
-              <tr><td>Apple One + iCloud+ (2TB)</td><td><span class="price">¥19</span></td><td><span class="space">440 GB</span></td></tr>
-              <tr><td>Apple Creator Studio + Apple One</td><td><span class="price">¥12</span></td><td><span class="space">33 GB</span></td></tr>
-              <tr><td>Apple Creator Studio + One + iCloud+</td><td><span class="price">¥23</span></td><td><span class="space">366 GB</span></td></tr>
-              <tr><td>日常全家桶 (One + iCloud+ + Fitness)</td><td><span class="price">¥22</span></td><td><span class="space">440 GB</span></td></tr>
-              <tr><td>创作者全家桶 (One + iCloud+ + Creator + Fitness)</td><td><span class="price">¥26</span></td><td><span class="space">366 GB</span></td></tr>
-            </tbody>
-          </table>
-      </div>
-
-      <h2 class="section-title"><span>Simple process</span>三步开始使用</h2>
-      <div class="steps">
-        <div class="step"><b>01 / 咨询</b><h4>告诉我你的需求</h4><p>说明想订阅的服务、地区和设备情况，我会帮你确认合适的方案。</p></div>
-        <div class="step"><b>02 / 确认</b><h4>确认席位与周期</h4><p>沟通价格、续费周期和注意事项，信息透明后再决定是否加入。</p></div>
-        <div class="step"><b>03 / 加入</b><h4>邀请加入家庭组</h4><p>完成订阅后按指引加入家庭组，随后即可开始使用对应服务。</p></div>
-      </div>
-
-      <section class="contact">
-        <div class="contact-info">
-          <h2>想了解当前可用席位？</h2>
-          <p>订阅状态和价格可能随平台规则变化，联系邮箱: hooleeasia@gmail.com</p>
-        </div>
-        <a class="btn" href="mailto:hooleeasia@gmail.com">联系我咨询</a>
-      </section>
-      
-      <p class="footer-note">家庭订阅共享需遵循 Apple 服务条款。页面信息仅用于服务介绍，具体以咨询时的最新情况为准。</p>
-    </div>
+<p><em>Thank you for using nginx.</em></p>
 </body>
-</html>
-    `;
-    return text;
+</html>`;
 }
 
 function base64Decode(str) {
@@ -668,6 +519,9 @@ function getToolStyles() {
         .status-error { background: rgba(244, 67, 54, 0.1); color: #c62828; border: 1px solid rgba(244, 67, 54, 0.2); }
         #current-qrcode { display: none; margin-top: 12px; padding: 12px; border: 1px solid rgba(229, 229, 223, 0.6); border-radius: 12px; background: rgba(255, 255, 255, 0.7); backdrop-filter: blur(10px); width: fit-content; max-width: 100%; }
         .hidden { display: none; }
+        /* 模态框样式 */
+        .modal-overlay { position: fixed; top: 0; left: 0; width: 100vw; height: 100vh; background: rgba(0, 0, 0, 0.4); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); display: none; justify-content: center; align-items: center; z-index: 1000; }
+        .modal-content { background: rgba(255, 255, 255, 0.85); border-radius: 20px; padding: 24px; width: 90%; max-width: 420px; box-shadow: 0 10px 40px rgba(0,0,0,0.2); border: 1px solid rgba(255, 255, 255, 0.5); }
     `;
 }
 
@@ -722,15 +576,28 @@ function renderToolScripts(includeEditor = false) {
             const copyBtn = button.closest('.actions').querySelector('.copy-btn'); if (copyBtn) copyBtn.classList.remove('hidden');
         }
         ${includeEditor ? `
+        function openSecurityModal() { document.getElementById('securityModal').style.display = 'flex'; }
+        function closeSecurityModal() { document.getElementById('securityModal').style.display = 'none'; }
+        
         function saveConfig(button) {
-            const statusElem = document.getElementById('configSaveStatus');
+            const statusElem = document.getElementById('configSaveStatus') || document.getElementById('secSaveStatus');
+            const secGuest = document.getElementById('sec-guest') ? document.getElementById('sec-guest').value : '';
+            const secUser = document.getElementById('sec-user') ? document.getElementById('sec-user').value : '';
+            const secPass = document.getElementById('sec-pass') ? document.getElementById('sec-pass').value : '';
+            const secPass2 = document.getElementById('sec-pass2') ? document.getElementById('sec-pass2').value : '';
+            
+            if(button.id === 'saveSecBtn' && secPass !== secPass2) {
+                alert('两次输入的密码不一致！');
+                return;
+            }
+
             button.disabled = true; button.textContent = '保存中...';
             fetch(window.location.href, {
                 method: 'POST',
                 body: JSON.stringify({ type: 'config', settings: {
-                    guest: document.getElementById('config-guest').value,
-                    user: document.getElementById('config-user').value,
-                    pass: document.getElementById('config-pass').value,
+                    guest: secGuest,
+                    user: secUser,
+                    pass: secPass,
                     subName: document.getElementById('config-subname').value,
                     subApi: document.getElementById('config-subapi').value,
                     subConfig: document.getElementById('config-subconfig').value,
@@ -742,7 +609,10 @@ function renderToolScripts(includeEditor = false) {
                 statusElem.textContent = '已保存 ' + new Date().toLocaleString(); statusElem.style.color = '#2e7d32';
                 setTimeout(() => location.reload(), 800); 
             }).catch(function (err) { statusElem.textContent = '保存失败: ' + err.message; statusElem.style.color = '#b00020'; })
-            .finally(function () { button.disabled = false; button.textContent = '保存全局设置'; });
+            .finally(function () { 
+                button.disabled = false; 
+                button.textContent = button.id === 'saveSecBtn' ? '保存安全设置' : '保存全局设置'; 
+            });
         }
         function saveContent(button) {
             const textarea = document.getElementById('content'); const statusElem = document.getElementById('saveStatus');
@@ -763,50 +633,117 @@ function renderToolScripts(includeEditor = false) {
 }
 
 function renderLoginPage(url, error = '') {
-    return `<!DOCTYPE html><html><head><title>${escapeHTML(FileName)} 管理员登录</title><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${getToolStyles()}.login-btn { display: block; width: 100%; max-width: 280px; min-height: 44px; margin: 28px auto 6px; background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); border: none; border-radius: 12px; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; } .login-btn:hover { background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%); } .error { text-align: center; margin-top: 15px; }</style></head><body><main class="page"><header class="header"><h1 class="title">${escapeHTML(FileName)}订阅管理</h1><div class="subtitle">管理员登录</div></header><section class="panel"><form method="POST" action="${escapeHTML(url.pathname)}"><div class="field"><label>用户名</label><input name="username" type="text" required autofocus></div><div class="field"><label>密码</label><input name="password" type="password" required></div><button type="submit" class="login-btn">登录</button>${error ? `<div class="error">${escapeHTML(error)}</div>` : ''}</form></section></main></body></html>`;
+    return `<!DOCTYPE html><html><head><title>${escapeHTML(FileName)} 管理员登录</title><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${getToolStyles()}.login-btn { display: block; width: 100%; max-width: 280px; min-height: 44px; margin: 28px auto 6px; background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%); border: none; border-radius: 12px; color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; transition: all 0.3s ease; } .login-btn:hover { background: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%); box-shadow: 0 4px 12px rgba(29, 78, 216, 0.3); } .error { text-align: center; margin-top: 15px; }</style></head>
+    <body style="display:flex; justify-content:center; align-items:center; min-height:100vh;">
+    <main class="page" style="width: 100%; max-width: 420px; padding: 20px;">
+        <section class="panel" style="padding: 30px 24px; text-align: center;">
+            <h1 class="title" style="margin-bottom: 10px;">${escapeHTML(FileName)}</h1>
+            <div class="subtitle" style="margin-bottom: 24px;">请登录管理员控制台</div>
+            <form method="POST" action="${escapeHTML(url.pathname)}" style="text-align: left;">
+                <div class="field"><label>用户名</label><input name="username" type="text" required autofocus></div>
+                <div class="field"><label>密码</label><input name="password" type="password" required></div>
+                <button type="submit" class="login-btn">登录</button>
+                ${error ? `<div class="error">${escapeHTML(error)}</div>` : ''}
+            </form>
+        </section>
+    </main></body></html>`;
 }
 
-function renderGuestPage(url, guest, displayApiUrl, displayConfig) {
-    return `<!DOCTYPE html><html><head><title>${escapeHTML(FileName)} 访客订阅</title><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${getToolStyles()}</style><script src="https://cdn.jsdelivr.net/npm/@keeex/qrcodejs-kx@1.0.2/qrcode.min.js"></script></head><body><div id="copyNotice" class="toast"></div><main class="page"><header class="header"><h1 class="title">${escapeHTML(FileName)} 访客订阅</h1><div class="subtitle">复制订阅链接或生成二维码</div></header><section class="panel"><h2 class="section-title">订阅链接</h2>${renderLinkList(getSubscriptionLinks(url, guest, true))}</section><section class="panel"><h2 class="section-title">当前提供服务的真实转换配置</h2><div class="section-note">已剥离失效设置，所展示即为实际输出数据的接口链路</div><div class="status-indicator status-ok">✅ SUBAPI 正常连通</div><div class="status-indicator status-ok">✅ SUBCONFIG 规则链路有效</div><div class="link-list"><div class="link-item"><div class="link-label">正在使用的 SUBAPI 后端</div><a class="link-url" href="${escapeHTML(displayApiUrl)}" target="_blank">${escapeHTML(displayApiUrl)}</a></div><div class="link-item"><div class="link-label">正在使用的 SUBCONFIG 规则</div><a class="link-url" href="${escapeHTML(displayConfig)}" target="_blank">${escapeHTML(displayConfig)}</a></div></div></section><div id="current-qrcode"></div></main>${renderToolScripts(false)}</body></html>`;
+function renderGuestPage(url, guest, displayApiUrl, displayConfig, apiOk, configOk, apiVersion) {
+    return `<!DOCTYPE html><html><head><title>${escapeHTML(FileName)} 访客订阅</title><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${getToolStyles()}</style><script src="https://cdn.jsdelivr.net/npm/@keeex/qrcodejs-kx@1.0.2/qrcode.min.js"></script></head><body><div id="copyNotice" class="toast"></div><main class="page"><header class="header"><h1 class="title">${escapeHTML(FileName)} 访客订阅</h1><div class="subtitle">复制订阅链接或生成二维码</div></header><section class="panel"><h2 class="section-title">订阅链接</h2>${renderLinkList(getSubscriptionLinks(url, guest, true))}</section>
+    
+    <section class="panel">
+        <h2 class="section-title">订阅转换服务</h2>
+        <div class="link-list">
+            <div class="link-item">
+                <div class="link-label">订阅转换后端 SUBAPI</div>
+                <div class="status-indicator ${apiOk ? 'status-ok' : 'status-error'}">
+                    ${apiOk ? `✅SUBAPI状态正常${apiVersion ? ` (${escapeHTML(apiVersion)})` : ''}` : `❌SUBAPI失效 等待维护`}
+                </div>
+                <a class="link-url" href="${escapeHTML(displayApiUrl)}" target="_blank">${escapeHTML(displayApiUrl)}</a>
+            </div>
+            <div class="link-item">
+                <div class="link-label">订阅转换规则 SUBCONFIG</div>
+                <div class="status-indicator ${configOk ? 'status-ok' : 'status-error'}">
+                    ${configOk ? `✅SUBCONFIG状态正常` : `❌SUBCONFIG失效 等待维护`}
+                </div>
+                <a class="link-url" href="${escapeHTML(displayConfig)}" target="_blank">${escapeHTML(displayConfig)}</a>
+            </div>
+        </div>
+    </section>
+    <div id="current-qrcode"></div></main>${renderToolScripts(false)}</body></html>`;
 }
 
-function renderAdminPage(url, content, hasKV, guest, settings, apiOk, configOk, currentApi, currentConfig) {
-    return `<!DOCTYPE html><html><head><title>${escapeHTML(settings.subName)}</title><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${getToolStyles()}</style><script src="https://cdn.jsdelivr.net/npm/@keeex/qrcodejs-kx@1.0.2/qrcode.min.js"></script></head><body><div id="copyNotice" class="toast"></div><main class="page"><header class="header"><h1 class="title">${escapeHTML(settings.subName)}</h1><div class="subtitle">汇聚订阅控制台</div></header>
+function renderAdminPage(url, content, hasKV, guest, settings, apiOk, configOk, currentApi, currentConfig, apiVersion) {
+    return `<!DOCTYPE html><html><head><title>${escapeHTML(settings.subName)}</title><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${getToolStyles()}</style><script src="https://cdn.jsdelivr.net/npm/@keeex/qrcodejs-kx@1.0.2/qrcode.min.js"></script></head><body>
+    <div id="copyNotice" class="toast"></div>
+    
+    <div id="securityModal" class="modal-overlay">
+        <div class="modal-content">
+            <h2 class="section-title" style="font-size: 20px; margin-bottom: 20px;">🛡️ 账户与安全设置</h2>
+            <div class="field"><label>访客订阅入口 (GUEST)</label><input id="sec-guest" type="text" value="${escapeHTML(settings.guest || '')}" placeholder="留空则按内置算法自动生成"></div>
+            <div class="field"><label>后台登录账号 (USER)</label><input id="sec-user" type="text" value="${escapeHTML(settings.user || '')}" placeholder="例如：admin"></div>
+            <div class="field"><label>后台登录密码 (PASS)</label><input id="sec-pass" type="password" value="${escapeHTML(settings.pass || '')}" placeholder="输入新密码"></div>
+            <div class="field"><label>确认登录密码</label><input id="sec-pass2" type="password" value="${escapeHTML(settings.pass || '')}" placeholder="再次输入密码"></div>
+            <div class="actions" style="margin-top: 24px; justify-content: flex-end;">
+                <button type="button" class="secondary" onclick="closeSecurityModal()">取消</button>
+                <button type="button" id="saveSecBtn" onclick="saveConfig(this)">保存安全设置</button>
+            </div>
+            <span id="secSaveStatus" class="muted" style="display:block; text-align:right; margin-top:8px;"></span>
+        </div>
+    </div>
+
+    <main class="page">
+    <header class="header" style="display: flex; justify-content: space-between; align-items: center;">
+        <div>
+            <h1 class="title">${escapeHTML(settings.subName)}</h1>
+            <div class="subtitle">汇聚订阅控制台</div>
+        </div>
+        ${hasKV ? `<button type="button" style="background: rgba(34, 34, 34, 0.8);" onclick="openSecurityModal()">🛡️ 安全设置</button>` : ''}
+    </header>
 
     <section class="panel">
-        <h2 class="section-title">全局设置 (绑定KV空间后生效)</h2>
-        <div class="field"><label for="config-guest">访客订阅入口 (GUEST)</label><input id="config-guest" type="text" value="${escapeHTML(settings.guest || '')}" placeholder="留空则按内置算法自动生成"></div>
-        <div class="field"><label for="config-user">后台登录账号 (USER)</label><input id="config-user" type="text" value="${escapeHTML(settings.user || '')}" placeholder="例如：admin"></div>
-        <div class="field"><label for="config-pass">后台登录密码 (PASS)</label><input id="config-pass" type="text" value="${escapeHTML(settings.pass || '')}" placeholder="例如：123456"></div>
-        <div class="field"><label for="config-subname">站点/订阅名称 (SUBNAME)</label><input id="config-subname" type="text" value="${escapeHTML(settings.subName)}" placeholder="例如：CF-SUB"></div>
-        
+        <h2 class="section-title">全局名称设置 (SUBNAME)</h2>
+        <div class="field"><input id="config-subname" type="text" value="${escapeHTML(settings.subName)}" placeholder="例如：CF-SUB"></div>
+    </section>
+
+    <section class="panel">
+        <h2 class="section-title">订阅转换后端 SUBAPI</h2>
         <div class="field">
-            <label for="config-subapi">订阅转换后端 (SUBAPI)</label>
             <input id="config-subapi" type="text" value="${escapeHTML(settings.subApi)}" placeholder="例如：SUBAPI.cmliussss.net">
             <div class="status-indicator ${apiOk ? 'status-ok' : 'status-error'}" style="margin-top: 8px;">
-                ${apiOk ? `✅ SUBAPI 正常连通 (${escapeHTML(currentApi)})` : `❌ 配置的后端无法连通 (${escapeHTML(currentApi)})，现已启用容灾回退 (${escapeHTML(defaultSubConverter)})`}
+                ${apiOk ? `✅SUBAPI状态正常${apiVersion ? ` (${escapeHTML(apiVersion)})` : ''}` : `❌SUBAPI失效 等待维护`}
             </div>
+            <a class="link-url" href="${escapeHTML(currentApi)}" target="_blank" style="margin-top: 8px; display: block;">${escapeHTML(currentApi)}</a>
         </div>
-        
+    </section>
+    
+    <section class="panel">
+        <h2 class="section-title">订阅转换规则 SUBCONFIG</h2>
         <div class="field">
-            <label for="config-subconfig">转换规则 (SUBCONFIG)</label>
             <textarea id="config-subconfig" style="min-height:80px">${escapeHTML(settings.subConfig)}</textarea>
             <div class="status-indicator ${configOk ? 'status-ok' : 'status-error'}" style="margin-top: 8px;">
-                ${configOk ? `✅ SUBCONFIG 规则链路有效` : `❌ 配置的规则无法读取，现已启用容灾回退 (默认规则)`}
+                ${configOk ? `✅SUBCONFIG状态正常` : `❌SUBCONFIG失效 等待维护`}
             </div>
+            <a class="link-url" href="${escapeHTML(currentConfig)}" target="_blank" style="margin-top: 8px; display: block;">${escapeHTML(currentConfig)}</a>
         </div>
-        
-        <div class="field"><label for="config-noads">去广告关键字 (NOADS) <span class="muted" style="font-weight: normal;">逗号或换行分隔</span></label><textarea id="config-noads" style="min-height: 80px;" placeholder="剩余流量,官网,套餐">${escapeHTML(settings.noAds)}</textarea></div>
+    </section>
+
+    <section class="panel">
+        <h2 class="section-title">去广告关键字 NOADS</h2>
+        <div class="field">
+            <textarea id="config-noads" style="min-height: 80px;" placeholder="[示例: 加入TG群, 订阅YouTube频道, https://t.me ......]">${escapeHTML(settings.noAds)}</textarea>
+            <div class="section-note">使用英文逗号、空格或换行分隔</div>
+        </div>
         ${hasKV ? `<div class="actions" style="margin-top:16px;"><button type="button" onclick="saveConfig(this)">保存全局设置并重载</button><span id="configSaveStatus" class="muted"></span></div>` : '<p class="muted">请绑定变量名称为 KV 的 KV 命名空间</p>'}
     </section>
 
     <section class="panel"><h2 class="section-title">汇聚订阅节点编辑</h2>${hasKV ? `<textarea id="content" placeholder="在此输入单节点链接或订阅地址...">${escapeHTML(content)}</textarea><div class="actions"><button type="button" onclick="saveContent(this)">保存节点订阅</button><span id="saveStatus" class="muted"></span></div>` : '<p class="muted">请绑定变量名称为 KV 的 KV 命名空间</p>'}</section>
     <section class="panel"><h2 class="section-title">管理员订阅链接</h2>${renderLinkList(getSubscriptionLinks(url, mytoken, false))}</section>
-    <section class="panel"><h2 class="section-title">访客订阅链接</h2>${renderLinkList(getSubscriptionLinks(url, guest, true))}</section>
     <div id="current-qrcode"></div></main>${renderToolScripts(true)}</body></html>`;
 }
 
-async function KV(request, env, txt, guest, apiOk, configOk, currentApi, currentConfig) {
+async function KV(request, env, txt, guest, apiOk, configOk, currentApi, currentConfig, apiVersion) {
     let settings = { subName: 'CF-SUB', subApi: '', subConfig: '', noAds: '', guest: '', user: '', pass: '' };
     let hasKV = !!env.KV;
     
@@ -821,7 +758,6 @@ async function KV(request, env, txt, guest, apiOk, configOk, currentApi, current
         if (request.method === "POST") {
             if (!hasKV) return new Response("未绑定KV空间", { status: 400 });
             
-            // 拦截非 JSON 格式的恶意/误导表单提交（如二次登录覆盖）
             const contentType = request.headers.get('content-type') || '';
             if (contentType.includes('application/x-www-form-urlencoded')) {
                 return Response.redirect(request.url, 302);
@@ -839,7 +775,6 @@ async function KV(request, env, txt, guest, apiOk, configOk, currentApi, current
                     return new Response("订阅保存成功"); 
                 }
             } catch (jsonErr) { 
-                // 仅用于向下兼容的旧版存储方式，现已被 JSON 格式取代
                 return new Response("不支持的数据格式", { status: 400 }); 
             }
         }
@@ -848,7 +783,7 @@ async function KV(request, env, txt, guest, apiOk, configOk, currentApi, current
         if (hasKV) try { content = await env.KV.get(txt) || ''; } catch (error) { content = '读取数据时发生错误'; }
         
         return new Response(
-            renderAdminPage(new URL(request.url), content, hasKV, guest, settings, apiOk, configOk, currentApi, currentConfig), 
+            renderAdminPage(new URL(request.url), content, hasKV, guest, settings, apiOk, configOk, currentApi, currentConfig, apiVersion), 
             { headers: { "Content-Type": "text/html;charset=utf-8" } }
         );
     } catch (error) { 
