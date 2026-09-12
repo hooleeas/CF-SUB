@@ -281,8 +281,456 @@ async function ADD(envadd) {
     return add;
 }
 
+// ================== Apple 拼车业务伪装页 ==================
 async function nginx() {
-    return `<!DOCTYPE html><html><head><title>Welcome to nginx!</title><style>body { width: 35em; margin: 0 auto; font-family: Tahoma, Verdana, Arial, sans-serif; }</style></head><body><h1>Welcome to nginx!</h1><p>If you see this page, the nginx web server is successfully installed and working. Further configuration is required.</p></body></html>`;
+    const text = `
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Apple 订阅拼车</title>
+    <meta name="description" content="Apple One、iCloud+ 与 Apple Creator Studio 家庭订阅共享，长期稳定，按月续费。">
+    <meta name="keywords" content="Apple One, iCloud+, Apple Creator Studio, 家庭订阅, 订阅拼车">
+    <style>
+        body { margin: 0; padding: 20px 0; background-color: #fff; }
+        #tracking-page {
+          --tracking-ink: #202124;
+          --tracking-muted: #6b6f76;
+          --tracking-coral: #ef684f;
+          --tracking-yellow: #f5c95b;
+          --tracking-paper: #fffaf2;
+          max-width: 1080px;
+          margin: 0 auto;
+          color: var(--tracking-ink);
+          font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        }
+
+        #tracking-page * {
+          box-sizing: border-box;
+        }
+
+        .tracking-hero {
+          position: relative;
+          overflow: hidden;
+          margin: 0 0 28px;
+          padding: clamp(34px, 7vw, 82px) clamp(24px, 7vw, 76px);
+          border-radius: 24px;
+          background: linear-gradient(132deg, #fff7e8 0%, #ffe8dc 56%, #f7d8c9 100%);
+        }
+
+        .tracking-hero::after {
+          content: "";
+          position: absolute;
+          right: -64px;
+          bottom: -96px;
+          width: 250px;
+          height: 250px;
+          border: 42px solid rgba(239, 104, 79, .16);
+          border-radius: 50%;
+        }
+
+        .tracking-kicker {
+          position: relative;
+          z-index: 1;
+          margin: 0 0 15px;
+          color: var(--tracking-coral);
+          font-size: 13px;
+          font-weight: 800;
+          letter-spacing: .12em;
+          text-transform: uppercase;
+        }
+
+        .tracking-hero h1 {
+          position: relative;
+          z-index: 1;
+          max-width: 650px;
+          margin: 0 0 18px;
+          font-size: clamp(34px, 5vw, 62px);
+          line-height: 1.08;
+          letter-spacing: -.04em;
+        }
+
+        .tracking-hero p {
+          position: relative;
+          z-index: 1;
+          max-width: 590px;
+          margin: 0;
+          color: #5c514c;
+          font-size: 17px;
+          line-height: 1.85;
+        }
+
+        .tracking-hero strong {
+          color: var(--tracking-coral);
+        }
+
+        .tracking-section-title {
+          margin: 44px 0 18px;
+          font-size: 26px;
+          letter-spacing: -.03em;
+        }
+
+        .tracking-section-title span {
+          display: block;
+          margin-bottom: 6px;
+          color: var(--tracking-coral);
+          font-size: 12px;
+          font-weight: 800;
+          letter-spacing: .12em;
+          text-transform: uppercase;
+        }
+
+        .tracking-plans {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 16px;
+        }
+
+        .tracking-plan {
+          min-height: 250px;
+          padding: 24px;
+          border: 1px solid #eee4d7;
+          border-radius: 16px;
+          background: var(--tracking-paper);
+          box-shadow: 0 12px 30px rgba(67, 42, 22, .06);
+        }
+
+        .tracking-plan.featured {
+          border-color: var(--tracking-coral);
+          background: #fff2eb;
+          transform: translateY(-7px);
+        }
+
+        .tracking-plan-label {
+          display: inline-block;
+          margin-bottom: 18px;
+          padding: 5px 9px;
+          border-radius: 5px;
+          background: var(--tracking-yellow);
+          color: #533b13;
+          font-size: 11px;
+          font-weight: 800;
+        }
+
+        .tracking-plan h3 {
+          margin: 0 0 10px;
+          font-size: 22px;
+        }
+
+        .tracking-plan p {
+          margin: 0;
+          color: var(--tracking-muted);
+          font-size: 14px;
+          line-height: 1.75;
+        }
+
+        .tracking-plan ul,
+        .tracking-steps {
+          padding: 0;
+          list-style: none;
+        }
+
+        .tracking-plan ul {
+          margin: 22px 0 0;
+        }
+
+        .tracking-plan li {
+          margin: 9px 0;
+          color: #4e5055;
+          font-size: 14px;
+        }
+
+        .tracking-plan li::before {
+          content: "✓";
+          display: inline-block;
+          width: 22px;
+          color: var(--tracking-coral);
+          font-weight: 800;
+        }
+
+        .tracking-steps {
+          display: grid;
+          grid-template-columns: repeat(3, minmax(0, 1fr));
+          gap: 18px;
+          margin: 0;
+        }
+
+        .tracking-step {
+          padding: 21px 0;
+          border-top: 2px solid var(--tracking-yellow);
+        }
+
+        .tracking-step b {
+          display: block;
+          margin-bottom: 9px;
+          color: var(--tracking-coral);
+          font-size: 12px;
+          letter-spacing: .1em;
+        }
+
+        .tracking-step strong {
+          display: block;
+          margin-bottom: 7px;
+          font-size: 17px;
+        }
+
+        .tracking-step p {
+          margin: 0;
+          color: var(--tracking-muted);
+          font-size: 14px;
+          line-height: 1.7;
+        }
+
+        .tracking-contact {
+          display: flex;
+          align-items: center;
+          justify-content: space-between;
+          gap: 24px;
+          margin-top: 42px;
+          padding: 28px 30px;
+          border-radius: 16px;
+          background: #202124;
+          color: #fff;
+        }
+
+        .tracking-contact h2 {
+          margin: 0 0 8px;
+          color: #fff;
+          font-size: 23px;
+        }
+
+        .tracking-contact p {
+          margin: 0;
+          color: #c9c7c3;
+          font-size: 14px;
+        }
+
+        .tracking-button {
+          display: inline-block;
+          flex: 0 0 auto;
+          padding: 12px 20px;
+          border-radius: 8px;
+          background: var(--tracking-coral);
+          color: #fff !important;
+          font-size: 14px;
+          font-weight: 700;
+          text-decoration: none !important;
+          transition: transform .2s ease, background .2s ease;
+        }
+
+        .tracking-button:hover {
+          background: #d9543d;
+          transform: translateY(-2px);
+        }
+
+        .tracking-note {
+          margin: 17px 0 0;
+          color: #99938d;
+          font-size: 12px;
+          line-height: 1.7;
+          text-align: center;
+        }
+
+        .tracking-pricing-table {
+          width: 100%;
+          border-collapse: collapse;
+          margin: 0;
+          background: var(--tracking-paper);
+          border: 1px solid #eee4d7;
+          border-radius: 12px;
+          overflow: hidden;
+          box-shadow: 0 12px 30px rgba(67, 42, 22, .06);
+        }
+
+        .tracking-pricing-table th {
+          background: #f9f4ec;
+          padding: 18px 20px;
+          text-align: left;
+          font-size: 14px;
+          font-weight: 800;
+          color: var(--tracking-coral);
+          letter-spacing: .05em;
+          border-bottom: 2px solid #eee4d7;
+        }
+
+        .tracking-pricing-table td {
+          padding: 16px 20px;
+          border-bottom: 1px solid #f5f0eb;
+          font-size: 14px;
+          color: var(--tracking-ink);
+        }
+
+        .tracking-pricing-table tr:last-child td {
+          border-bottom: none;
+        }
+
+        .tracking-pricing-table tbody tr:hover {
+          background: rgba(239, 104, 79, .04);
+        }
+
+        .tracking-pricing-price {
+          font-weight: 700;
+          color: var(--tracking-coral);
+          font-size: 16px;
+        }
+
+        .tracking-pricing-space {
+          color: var(--tracking-muted);
+          font-size: 13px;
+        }
+
+        /* Dark mode compatibility */
+        @media (prefers-color-scheme: dark) {
+            body { background-color: #1a1a1a; }
+            #tracking-page {
+              --tracking-ink: #f1ede8;
+              --tracking-muted: #b6b0aa;
+              --tracking-coral: #ff8067;
+              --tracking-yellow: #e9b94f;
+              --tracking-paper: #28272a;
+            }
+            .tracking-hero {
+              background: linear-gradient(132deg, #3b2f2d 0%, #3c2d2e 56%, #3a3030 100%);
+              box-shadow: inset 0 0 0 1px rgba(255, 220, 202, .08);
+            }
+            .tracking-hero::after { border-color: rgba(255, 128, 103, .16); }
+            .tracking-hero p { color: #d6cbc3; }
+            .tracking-plan { border-color: #3b393d; box-shadow: 0 12px 30px rgba(0, 0, 0, .14); }
+            .tracking-plan.featured { background: #332a2b; border-color: var(--tracking-coral); }
+            .tracking-plan-label { background: #dcae49; color: #332710; }
+            .tracking-plan li { color: #d0cac5; }
+            .tracking-contact { background: #29272a; border: 1px solid #3b393d; }
+            .tracking-pricing-table { border-color: #3b393d; box-shadow: 0 12px 30px rgba(0, 0, 0, .14); }
+            .tracking-pricing-table th { background: #302e31; border-bottom-color: #454247; }
+            .tracking-pricing-table td { border-bottom-color: #3b393d; }
+            .tracking-pricing-table tbody tr:hover { background: rgba(255, 128, 103, .08); }
+        }
+
+        @media (max-width: 700px) {
+          .tracking-plans,
+          .tracking-steps { grid-template-columns: 1fr; }
+          .tracking-plan.featured { transform: none; }
+          .tracking-contact { align-items: flex-start; flex-direction: column; }
+          .tracking-button { width: 100%; text-align: center; }
+          .tracking-pricing-table { font-size: 12px; }
+          .tracking-pricing-table th,
+          .tracking-pricing-table td { padding: 12px 14px; }
+          .tracking-pricing-price { font-size: 14px; }
+        }
+    </style>
+</head>
+<body>
+    <div id="tracking-page">
+      <section class="tracking-hero">
+        <p class="tracking-kicker">Apple subscription sharing</p>
+        <h1>把常用的 Apple 服务，<br><strong>用更舒服的方式订阅。</strong></h1>
+        <p>Apple One、iCloud+ 与 Apple Creator Studio 家庭订阅共享。长期稳定，按月续费，适合想省心使用 Apple 生态服务的你。</p>
+      </section>
+
+      <h2 class="tracking-section-title"><span>Choose your service</span>按需选择，不为用不到的功能买单</h2>
+      <div class="tracking-plans">
+        <article class="tracking-plan featured">
+          <span class="tracking-plan-label">热门选择</span>
+          <h3>Apple One</h3>
+          <p>把音乐、影视、游戏和云空间整合到一个家庭订阅中。</p>
+          <ul>
+            <li>Apple Music</li>
+            <li>Apple TV+</li>
+            <li>Apple Arcade</li>
+            <li>iCloud+ 空间</li>
+          </ul>
+        </article>
+        <article class="tracking-plan">
+          <span class="tracking-plan-label">云空间</span>
+          <h3>iCloud+</h3>
+          <p>给照片、文件和设备备份留出更充足的空间，跨设备保持同步。</p>
+          <ul>
+            <li>独立家庭成员席位</li>
+            <li>适合长期稳定使用</li>
+            <li>按月续费更灵活</li>
+          </ul>
+        </article>
+        <article class="tracking-plan">
+          <span class="tracking-plan-label">创作工具</span>
+          <h3>Apple Creator Studio</h3>
+          <p>面向创作者的 Apple 应用套装，适合视频、音乐和内容创作需求。</p>
+          <ul>
+            <li>家庭订阅共享</li>
+            <li>按需加入或续费</li>
+            <li>使用问题可咨询</li>
+          </ul>
+        </article>
+      </div>
+
+      <h2 class="tracking-section-title"><span>Pricing plans</span>常见套餐与价格</h2>
+      <table class="tracking-pricing-table">
+        <thead>
+          <tr>
+            <th>订阅组合</th>
+            <th>每月定价</th>
+            <th>个人 iCloud 空间</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Apple One</td>
+            <td><span class="tracking-pricing-price">¥6</span></td>
+            <td><span class="tracking-pricing-space">40 GB</span></td>
+          </tr>
+          <tr>
+            <td>iCloud+ (2TB)</td>
+            <td><span class="tracking-pricing-price">¥13</span></td>
+            <td><span class="tracking-pricing-space">400 GB</span></td>
+          </tr>
+          <tr>
+            <td>Apple One + iCloud+ (2TB)</td>
+            <td><span class="tracking-pricing-price">¥19</span></td>
+            <td><span class="tracking-pricing-space">440 GB</span></td>
+          </tr>
+          <tr>
+            <td>Apple Creator Studio + Apple One</td>
+            <td><span class="tracking-pricing-price">¥12</span></td>
+            <td><span class="tracking-pricing-space">33 GB</span></td>
+          </tr>
+          <tr>
+            <td>Apple Creator Studio + One + iCloud+</td>
+            <td><span class="tracking-pricing-price">¥23</span></td>
+            <td><span class="tracking-pricing-space">366 GB</span></td>
+          </tr>
+          <tr>
+            <td>日常全家桶 (One + iCloud+ + Fitness)</td>
+            <td><span class="tracking-pricing-price">¥22</span></td>
+            <td><span class="tracking-pricing-space">440 GB</span></td>
+          </tr>
+          <tr>
+            <td>创作者全家桶 (One + iCloud+ + Creator + Fitness)</td>
+            <td><span class="tracking-pricing-price">¥26</span></td>
+            <td><span class="tracking-pricing-space">366 GB</span></td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2 class="tracking-section-title"><span>Simple process</span>三步开始使用</h2>
+      <ol class="tracking-steps">
+        <li class="tracking-step"><b>01 / 咨询</b><strong>告诉我你的需求</strong><p>说明想订阅的服务、地区和设备情况，我会帮你确认合适的方案。</p></li>
+        <li class="tracking-step"><b>02 / 确认</b><strong>确认席位与周期</strong><p>沟通价格、续费周期和注意事项，信息透明后再决定是否加入。</p></li>
+        <li class="tracking-step"><b>03 / 加入</b><strong>邀请加入家庭组</strong><p>完成订阅后按指引加入家庭组，随后即可开始使用对应服务。</p></li>
+      </ol>
+
+      <section class="tracking-contact">
+        <div>
+          <h2>想了解当前可用席位？</h2>
+          <p>订阅状态和价格可能随平台规则变化，欢迎先咨询再决定。</p>
+        </div>
+        <a class="tracking-button" href="mailto:hooleeasia@gmail.com">联系我咨询</a>
+      </section>
+      <p class="tracking-note">家庭订阅共享需遵循 Apple 服务条款。页面信息仅用于服务介绍，具体以咨询时的最新情况为准。</p>
+    </div>
+</body>
+</html>
+    `;
+    return text;
 }
 
 function base64Decode(str) {
