@@ -1,0 +1,458 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Apple 订阅拼团</title>
+  <meta name="description" content="Apple One、iCloud+ 与 Apple Creator Studio 家庭订阅共享，长期稳定，按月续费。">
+  <meta name="keywords" content="Apple One, iCloud+, Apple Creator Studio, 家庭订阅, 订阅拼车">
+  <style>
+    :root {
+      --ink: #202124;
+      --muted: #6b6f76;
+      --coral: #ef684f;
+      --yellow: #f5c95b;
+      --paper: #fffaf2;
+      --bg: #ffffff;
+      --border: #eee4d7;
+      --table-header: #f9f4ec;
+      --table-hover: rgba(239, 104, 79, .04);
+      --hero-bg: linear-gradient(132deg, #fff7e8 0%, #ffe8dc 56%, #f7d8c9 100%);
+      --hero-circle: rgba(239, 104, 79, .16);
+      --card-featured-bg: #fff2eb;
+      --contact-bg: #202124;
+      --contact-text: #fff;
+      --contact-muted: #c9c7c3;
+    }
+
+    /* 自动跟随系统深色模式 */
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --ink: #f1ede8;
+        --muted: #b6b0aa;
+        --coral: #ff8067;
+        --yellow: #e9b94f;
+        --paper: #28272a;
+        --bg: #1a1a1c;
+        --border: #3b393d;
+        --table-header: #302e31;
+        --table-hover: rgba(255, 128, 103, .08);
+        --hero-bg: linear-gradient(132deg, #3b2f2d 0%, #3c2d2e 56%, #3a3030 100%);
+        --hero-circle: rgba(255, 128, 103, .16);
+        --card-featured-bg: #332a2b;
+        --contact-bg: #29272a;
+        --contact-text: #f1ede8;
+        --contact-muted: #b6b0aa;
+      }
+    }
+
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      margin: 0;
+      padding: 0;
+      background-color: var(--bg);
+      color: var(--ink);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+      -webkit-font-smoothing: antialiased;
+      line-height: 1.5;
+    }
+
+    .container {
+      max-width: 1080px;
+      margin: 0 auto;
+      padding: 40px 20px;
+    }
+
+    .hero {
+      position: relative;
+      overflow: hidden;
+      margin: 0 0 28px;
+      padding: clamp(34px, 7vw, 82px) clamp(24px, 7vw, 76px);
+      border-radius: 24px;
+      background: var(--hero-bg);
+      box-shadow: 0 10px 30px rgba(0,0,0,0.02);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .hero { box-shadow: inset 0 0 0 1px rgba(255, 220, 202, .08); }
+    }
+
+    .hero::after {
+      content: "";
+      position: absolute;
+      right: -64px;
+      bottom: -96px;
+      width: 250px;
+      height: 250px;
+      border: 42px solid var(--hero-circle);
+      border-radius: 50%;
+    }
+
+    .kicker {
+      position: relative;
+      z-index: 1;
+      margin: 0 0 15px;
+      color: var(--coral);
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .hero h1 {
+      position: relative;
+      z-index: 1;
+      max-width: 650px;
+      margin: 0 0 18px;
+      font-size: clamp(32px, 5vw, 62px);
+      line-height: 1.08;
+      letter-spacing: -.04em;
+    }
+
+    .hero strong { color: var(--coral); }
+
+    .hero p {
+      position: relative;
+      z-index: 1;
+      max-width: 590px;
+      margin: 0;
+      font-size: 17px;
+      line-height: 1.85;
+      color: #5c514c;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .hero p { color: #d6cbc3; }
+    }
+
+    .section-title {
+      margin: 44px 0 18px;
+      font-size: 26px;
+      letter-spacing: -.03em;
+    }
+
+    .section-title span {
+      display: block;
+      margin-bottom: 6px;
+      color: var(--coral);
+      font-size: 12px;
+      font-weight: 800;
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+
+    .plans {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 16px;
+    }
+
+    .plan {
+      min-height: 250px;
+      padding: 24px;
+      border: 1px solid var(--border);
+      border-radius: 16px;
+      background: var(--paper);
+      box-shadow: 0 12px 30px rgba(67, 42, 22, .06);
+      transition: transform 0.2s;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .plan { box-shadow: 0 12px 30px rgba(0, 0, 0, .14); }
+    }
+
+    .plan.featured {
+      border-color: var(--coral);
+      background: var(--card-featured-bg);
+      transform: translateY(-7px);
+    }
+
+    .plan-label {
+      display: inline-block;
+      margin-bottom: 18px;
+      padding: 5px 9px;
+      border-radius: 5px;
+      background: var(--yellow);
+      color: #533b13;
+      font-size: 11px;
+      font-weight: 800;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .plan-label { background: #dcae49; color: #332710; }
+    }
+
+    .plan h3 { margin: 0 0 10px; font-size: 22px; }
+    .plan p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.75; }
+    .plan ul, .steps { padding: 0; list-style: none; }
+    .plan ul { margin: 22px 0 0; }
+    
+    .plan li {
+      margin: 9px 0;
+      color: var(--ink);
+      font-size: 14px;
+      display: flex;
+    }
+    
+    .plan li::before {
+      content: "✓";
+      display: inline-block;
+      width: 22px;
+      color: var(--coral);
+      font-weight: 800;
+      flex-shrink: 0;
+    }
+
+    .steps {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 18px;
+      margin: 0;
+    }
+
+    .step {
+      padding: 21px 0;
+      border-top: 2px solid var(--yellow);
+    }
+
+    .step b {
+      display: block;
+      margin-bottom: 9px;
+      color: var(--coral);
+      font-size: 12px;
+      letter-spacing: .1em;
+    }
+
+    .step strong { display: block; margin-bottom: 7px; font-size: 17px; }
+    .step p { margin: 0; color: var(--muted); font-size: 14px; line-height: 1.7; }
+
+    .pricing-table-wrapper {
+      width: 100%;
+      background: var(--paper);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      overflow: hidden;
+      box-shadow: 0 12px 30px rgba(67, 42, 22, .06);
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .pricing-table-wrapper { box-shadow: 0 12px 30px rgba(0, 0, 0, .14); }
+    }
+
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      table-layout: fixed;
+    }
+
+    th {
+      background: var(--table-header);
+      padding: 18px 20px;
+      text-align: left;
+      font-size: 14px;
+      font-weight: 800;
+      color: var(--coral);
+      letter-spacing: .05em;
+      border-bottom: 2px solid var(--border);
+    }
+
+    td {
+      padding: 16px 20px;
+      border-bottom: 1px solid var(--border);
+      font-size: 14px;
+      color: var(--ink);
+      word-wrap: break-word;
+    }
+
+    /* 宽度分配，优先保证第一列的文字展示 */
+    th:nth-child(1), td:nth-child(1) { width: 50%; }
+    th:nth-child(2), td:nth-child(2) { width: 22%; }
+    th:nth-child(3), td:nth-child(3) { width: 28%; }
+
+    tr:last-child td { border-bottom: none; }
+    tbody tr:hover { background: var(--table-hover); }
+
+    .pricing-price { font-weight: 700; color: var(--coral); font-size: 16px; }
+    .pricing-space { color: var(--muted); font-size: 13px; }
+
+    .contact {
+      margin-top: 42px;
+      padding: 32px 36px;
+      border-radius: 16px;
+      background: var(--contact-bg);
+      border: 1px solid var(--border);
+    }
+
+    .contact h2 {
+      margin: 0 0 10px;
+      color: var(--contact-text);
+      font-size: 22px;
+    }
+
+    .contact p {
+      margin: 0;
+      color: var(--contact-muted);
+      font-size: 15px;
+      line-height: 1.6;
+    }
+
+    .note {
+      margin: 20px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.7;
+      text-align: center;
+    }
+
+    /* 移动端专属适配 */
+    @media (max-width: 768px) {
+      .container {
+        /* 移动端留出更多的左右安全距离，防止贴边 */
+        padding: 30px 24px;
+      }
+
+      .hero {
+        padding: 40px 24px;
+        border-radius: 20px;
+      }
+
+      .plans, .steps {
+        grid-template-columns: 1fr;
+      }
+
+      .plan.featured {
+        transform: none;
+      }
+
+      .contact {
+        padding: 24px 20px;
+      }
+
+      /* 移动端表格极限压缩排版，不出现横向滚动条 */
+      th, td {
+        padding: 12px 10px;
+        font-size: 13px;
+        line-height: 1.3;
+      }
+      
+      th:nth-child(1), td:nth-child(1) { width: 44%; } 
+      th:nth-child(2), td:nth-child(2) { width: 25%; }
+      th:nth-child(3), td:nth-child(3) { width: 31%; }
+
+      .pricing-price { font-size: 14px; }
+      .pricing-space { font-size: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <section class="hero">
+      <p class="kicker">Apple subscription sharing</p>
+      <h1>把常用的 Apple 服务，<br><strong>用更舒服的方式订阅。</strong></h1>
+      <p>Apple One、iCloud+ 与 Apple Creator Studio 家庭订阅共享。长期稳定，按月续费，适合想省心使用 Apple 生态服务的你。</p>
+    </section>
+
+    <h2 class="section-title"><span>Choose your service</span>按需选择，不为用不到的功能买单</h2>
+    <div class="plans">
+      <article class="plan featured">
+        <span class="plan-label">热门选择</span>
+        <h3>Apple One</h3>
+        <p>把音乐、影视、游戏和云空间整合到一个家庭订阅中。</p>
+        <ul>
+          <li>Apple Music</li>
+          <li>Apple TV+</li>
+          <li>Apple Arcade</li>
+          <li>iCloud+ 空间</li>
+        </ul>
+      </article>
+      <article class="plan">
+        <span class="plan-label">云空间</span>
+        <h3>iCloud+</h3>
+        <p>给照片、文件和设备备份留出更充足的空间，跨设备保持同步。</p>
+        <ul>
+          <li>独立家庭成员席位</li>
+          <li>适合长期稳定使用</li>
+          <li>按月续费更灵活</li>
+        </ul>
+      </article>
+      <article class="plan">
+        <span class="plan-label">创作工具</span>
+        <h3>Apple Creator Studio</h3>
+        <p>面向创作者的 Apple 应用套装，适合视频、音乐和内容创作需求。</p>
+        <ul>
+          <li>家庭订阅共享</li>
+          <li>按需加入或续费</li>
+          <li>使用问题可咨询</li>
+        </ul>
+      </article>
+    </div>
+
+    <h2 class="section-title"><span>Pricing plans</span>常见套餐与价格</h2>
+    <div class="pricing-table-wrapper">
+      <table>
+        <thead>
+          <tr>
+            <th>订阅组合</th>
+            <th>每月定价</th>
+            <th>个人 iCloud 空间</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Apple One</td>
+            <td><span class="pricing-price">¥6</span></td>
+            <td><span class="pricing-space">40 GB</span></td>
+          </tr>
+          <tr>
+            <td>iCloud+ (2TB)</td>
+            <td><span class="pricing-price">¥13</span></td>
+            <td><span class="pricing-space">400 GB</span></td>
+          </tr>
+          <tr>
+            <td>Apple One + iCloud+ (2TB)</td>
+            <td><span class="pricing-price">¥19</span></td>
+            <td><span class="pricing-space">440 GB</span></td>
+          </tr>
+          <tr>
+            <td>Apple Creator Studio + Apple One</td>
+            <td><span class="pricing-price">¥12</span></td>
+            <td><span class="pricing-space">33 GB</span></td>
+          </tr>
+          <tr>
+            <td>Apple Creator Studio + One + iCloud+</td>
+            <td><span class="pricing-price">¥23</span></td>
+            <td><span class="pricing-space">366 GB</span></td>
+          </tr>
+          <tr>
+            <td>日常全家桶 (One + iCloud+ + Fitness)</td>
+            <td><span class="pricing-price">¥22</span></td>
+            <td><span class="pricing-space">440 GB</span></td>
+          </tr>
+          <tr>
+            <td>创作者全家桶 (One + iCloud+ + Creator + Fitness)</td>
+            <td><span class="pricing-price">¥26</span></td>
+            <td><span class="pricing-space">366 GB</span></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h2 class="section-title"><span>Simple process</span>三步开始使用</h2>
+    <div class="steps">
+      <div class="step"><b>01 / 咨询</b><strong>告诉我你的需求</strong><p>说明想订阅的服务、地区和设备情况，我会帮你确认合适的方案。</p></div>
+      <div class="step"><b>02 / 确认</b><strong>确认席位与周期</strong><p>沟通价格、续费周期和注意事项，信息透明后再决定是否加入。</p></div>
+      <div class="step"><b>03 / 加入</b><strong>邀请加入家庭组</strong><p>完成订阅后按指引加入家庭组，随后即可开始使用对应服务。</p></div>
+    </div>
+
+    <section class="contact">
+      <h2>想了解当前可用席位？</h2>
+      <p>订阅状态和价格可能随平台规则变化，欢迎先咨询再决定。联系邮箱：hooleeasia@gmail.com</p>
+    </section>
+    
+    <p class="note">家庭订阅共享需遵循 Apple 服务条款。页面信息仅用于服务介绍，具体以咨询时的最新情况为准。</p>
+  </div>
+</body>
+</html>
