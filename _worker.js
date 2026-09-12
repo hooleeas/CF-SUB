@@ -721,7 +721,7 @@ async function nginx(titleName) {
       <section class="tracking-contact">
         <div>
           <h2>想了解当前可用席位？</h2>
-          <p>订阅状态和价格可能随平台规则变化，联系邮箱hooleeas@gmail.com</p>
+          <p>订阅状态和价格可能随平台规则变化，联系邮箱hooleeasia@gmail.com</p>
         </div>
         <a class="tracking-button" href="mailto:hooleeasia@gmail.com">联系我咨询</a>
       </section>
