@@ -2,9 +2,6 @@
 
 let mytoken = 'auto';
 let guestToken = ''; //可以随便取，或者uuid生成，https://1024tools.com/uuid
-let BotToken = ''; //可以为空，或者@BotFather中输入/start，/newbot，并关注机器人
-let ChatID = ''; //可以为空，或者@userinfobot中获取，/start
-let TG = 0; //小白勿动， 开发者专用，1 为推送所有的访问信息，0 为不推送订阅转换后端的访问信息与异常访问
 let FileName = 'CF-Workers-SUB';
 let SUBUpdateTime = 6; //自定义订阅更新时间，单位小时
 let total = 99;//TB
@@ -19,6 +16,7 @@ let urls = [];
 let subConverter = "SUBAPI.cmliussss.net"; //在线订阅转换后端，目前使用CM的订阅转换功能。支持自建psub 可自行搭建https://github.com/bulianglin/psub
 let subConfig = "https://raw.githubusercontent.com/cmliu/ACL4SSR/main/Clash/config/ACL4SSR_Online_MultiCountry.ini"; //订阅配置文件
 let subProtocol = 'https';
+let config_noAds = ''; // 去广告关键字缓存
 
 export default {
     async fetch(request, env) {
@@ -26,19 +24,31 @@ export default {
         const userAgent = userAgentHeader ? userAgentHeader.toLowerCase() : "null";
         const url = new URL(request.url);
         const token = url.searchParams.get('token');
+        
         mytoken = env.TOKEN || mytoken;
-        BotToken = env.TGTOKEN || BotToken;
-        ChatID = env.TGID || ChatID;
-        TG = env.TG || TG;
-        subConverter = env.SUBAPI || subConverter;
+
+        // 从 KV 获取动态设置的变量
+        if (env.KV) {
+            const kvConfigStr = await env.KV.get('CONFIG.json');
+            if (kvConfigStr) {
+                try {
+                    const kvConfig = JSON.parse(kvConfigStr);
+                    FileName = kvConfig.subName || FileName;
+                    subConverter = kvConfig.subApi || subConverter;
+                    subConfig = kvConfig.subConfig || subConfig;
+                    config_noAds = kvConfig.noAds || '';
+                } catch(e) {
+                    console.error('解析 KV 配置失败', e);
+                }
+            }
+        }
+
         if (subConverter.includes("http://")) {
             subConverter = subConverter.split("//")[1];
             subProtocol = 'http';
         } else {
             subConverter = subConverter.split("//")[1] || subConverter;
         }
-        subConfig = env.SUBCONFIG || subConfig;
-        FileName = env.SUBNAME || FileName;
 
         const currentDate = new Date();
         currentDate.setHours(0, 0, 0, 0);
@@ -59,7 +69,6 @@ export default {
 
         // 如果路径既不是管理员，也不是访客，则拦截
         if (!([mytoken, fakeToken, 访客订阅].includes(token) || url.pathname == ("/" + mytoken) || url.pathname.includes("/" + mytoken + "?") || guestPath)) {
-            if (TG == 1 && url.pathname !== "/" && url.pathname !== "/favicon.ico") await sendMessage(`#异常访问 ${FileName}`, request.headers.get('CF-Connecting-IP'), `UA: ${userAgent}</tg-spoiler>\n域名: ${url.hostname}\n<tg-spoiler>入口: ${url.pathname + url.search}</tg-spoiler>`);
             if (env.URL302) return Response.redirect(env.URL302, 302);
             else if (env.URL) return await proxyURL(env.URL, url);
             else return new Response(await nginx(), {
@@ -90,7 +99,6 @@ export default {
                             }
                         }
                         // 管理员访问：渲染拥有完整管理权限的KV编辑面板
-                        await sendMessage(`#编辑订阅 ${FileName}`, request.headers.get('CF-Connecting-IP'), `UA: ${userAgentHeader}</tg-spoiler>\n域名: ${url.hostname}\n<tg-spoiler>入口: ${url.pathname + url.search}</tg-spoiler>`);
                         return await KV(request, env, 'LINK.txt', 访客订阅);
                     }
                 } else {
@@ -112,7 +120,6 @@ export default {
             }
             MainData = 自建节点;
             urls = await ADD(订阅链接);
-            await sendMessage(`#获取订阅 ${FileName}`, request.headers.get('CF-Connecting-IP'), `UA: ${userAgentHeader}</tg-spoiler>\n域名: ${url.hostname}\n<tg-spoiler>入口: ${url.pathname + url.search}</tg-spoiler>`);
             const isSubConverterRequest = request.headers.get('subconverter-request') || request.headers.get('subconverter-version') || userAgent.includes('subconverter');
             let 订阅格式 = 'base64';
             if (!(userAgent.includes('null') || isSubConverterRequest || userAgent.includes('nekobox') || userAgent.includes(('CF-Workers-SUB').toLowerCase()))) {
@@ -168,12 +175,12 @@ export default {
             const utf8Decoder = new TextDecoder();
             const text = utf8Decoder.decode(encodedData);
 
-            // ================= 新增：支持 NOADS 变量的纯净过滤逻辑 =================
+            // ================= 支持 NOADS 变量的纯净过滤逻辑 =================
             let adKeywords = [];
             let filteredLines = text.split('\n');
 
-            if (env.NOADS) {
-                adKeywords = env.NOADS.split(/,|\r?\n/)
+            if (config_noAds) {
+                adKeywords = config_noAds.split(/,|\r?\n/)
                     .map(k => k.trim().toLowerCase())
                     .filter(k => k.length > 0);
                 
@@ -289,29 +296,6 @@ async function nginx() {
     return text;
 }
 
-async function sendMessage(type, ip, add_data = "") {
-    if (BotToken !== '' && ChatID !== '') {
-        let msg = "";
-        const response = await fetch(`http://ip-api.com/json/${ip}?lang=zh-CN`);
-        if (response.status == 200) {
-            const ipInfo = await response.json();
-            msg = `${type}\nIP: ${ip}\n国家: ${ipInfo.country}\n<tg-spoiler>城市: ${ipInfo.city}\n组织: ${ipInfo.org}\nASN: ${ipInfo.as}\n${add_data}`;
-        } else {
-            msg = `${type}\nIP: ${ip}\n<tg-spoiler>${add_data}`;
-        }
-
-        let url = "https://api.telegram.org/bot" + BotToken + "/sendMessage?chat_id=" + ChatID + "&parse_mode=HTML&text=" + encodeURIComponent(msg);
-        return fetch(url, {
-            method: 'get',
-            headers: {
-                'Accept': 'text/html,application/xhtml+xml,application/xml;',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'User-Agent': 'Mozilla/5.0 Chrome/90.0.4430.72'
-            }
-        });
-    }
-}
-
 function base64Decode(str) {
     const bytes = new Uint8Array(atob(str).split('').map(c => c.charCodeAt(0)));
     const decoder = new TextDecoder('utf-8');
@@ -411,7 +395,7 @@ async function getSUB(api, request, 追加UA, userAgentHeader) {
                         apiUrl: api[index] 
                     };
                 }
-                console.error(`请求失败: ${api[index]}, 错误信息: ${reason.status} ${reason.statusText}`);
+                console.error(`请求失败: ${api[index]}, 错误信息: ${reason?.status} ${reason?.statusText}`);
                 return {
                     status: '请求失败',
                     value: null,
@@ -474,7 +458,6 @@ async function getUrl(request, targetUrl, 追加UA, userAgentHeader) {
     console.log(`请求URL: ${targetUrl}`);
     console.log(`请求头: ${JSON.stringify([...newHeaders])}`);
     console.log(`请求方法: ${request.method}`);
-    console.log(`请求体: ${request.method === "GET" ? null : request.body}`);
 
     return fetch(modifiedRequest);
 }
@@ -704,11 +687,11 @@ function getToolStyles() {
             cursor: default;
         }
         .field {
-            margin-top: 10px;
+            margin-top: 12px;
         }
         label {
             display: block;
-            margin-bottom: 8px;
+            margin-bottom: 6px;
             font-weight: 600;
             color: #1a1a1a;
         }
@@ -718,14 +701,20 @@ function getToolStyles() {
             border-radius: 10px;
             background: rgba(255, 255, 255, 0.8);
             color: #202124;
-            font-size: 15px;
+            font-size: 14px;
             padding: 10px;
+            transition: border-color 0.2s;
+        }
+        input:focus, textarea:focus {
+            outline: none;
+            border-color: #3b82f6;
+            background: #fff;
         }
         input {
             height: 42px;
         }
         textarea {
-            min-height: 300px;
+            min-height: 200px;
             line-height: 1.5;
             resize: vertical;
         }
@@ -736,6 +725,7 @@ function getToolStyles() {
         .muted {
             color: #666;
             font-size: 13px;
+            margin-left: 8px;
         }
         .toast {
             position: fixed;
@@ -895,12 +885,6 @@ function renderToolScripts(includeEditor = false) {
             });
         }
 
-        function togglePanel(id) {
-            const panel = document.getElementById(id);
-            panel.classList.toggle('hidden');
-        }
-
-        // 页面加载完成后检测SUBAPI状态
         document.addEventListener('DOMContentLoaded', function() {
             checkSubapiStatus();
         });
@@ -911,33 +895,75 @@ function renderToolScripts(includeEditor = false) {
             textarea.value = textarea.value.replace(/：/g, ':');
         }
 
+        function saveConfig(button) {
+            const statusElem = document.getElementById('configSaveStatus');
+            const subname = document.getElementById('config-subname').value;
+            const subapi = document.getElementById('config-subapi').value;
+            const subconfig = document.getElementById('config-subconfig').value;
+            const noads = document.getElementById('config-noads').value;
+            
+            button.disabled = true;
+            button.textContent = '保存中...';
+            
+            const payload = {
+                type: 'config',
+                settings: {
+                    subName: subname,
+                    subApi: subapi,
+                    subConfig: subconfig,
+                    noAds: noads
+                }
+            };
+
+            fetch(window.location.href, {
+                method: 'POST',
+                body: JSON.stringify(payload),
+                headers: { 'Content-Type': 'application/json' },
+                cache: 'no-cache'
+            }).then(function (response) {
+                if (!response.ok) throw new Error('HTTP ' + response.status);
+                statusElem.textContent = '已保存 ' + new Date().toLocaleString();
+                statusElem.style.color = '#2e7d32';
+                setTimeout(() => location.reload(), 800); // 保存后刷新页面应用新全局设置
+            }).catch(function (error) {
+                statusElem.textContent = '保存失败: ' + error.message;
+                statusElem.style.color = '#b00020';
+            }).finally(function () {
+                button.disabled = false;
+                button.textContent = '保存全局设置';
+            });
+        }
+
         function saveContent(button) {
             const textarea = document.getElementById('content');
             const statusElem = document.getElementById('saveStatus');
             if (!textarea) return;
             if (!/iPad|iPhone|iPod/.test(navigator.userAgent)) replaceFullwidthColon();
+            
             button.disabled = true;
-            button.textContent = '保存中';
+            button.textContent = '保存中...';
+            
+            const payload = {
+                type: 'content',
+                content: textarea.value || ''
+            };
+
             fetch(window.location.href, {
                 method: 'POST',
-                body: textarea.value || '',
-                headers: {
-                    'Content-Type': 'text/plain;charset=UTF-8'
-                },
+                body: JSON.stringify(payload),
+                headers: { 'Content-Type': 'application/json' },
                 cache: 'no-cache'
             }).then(function (response) {
                 if (!response.ok) throw new Error('HTTP ' + response.status);
-                const now = new Date().toLocaleString();
                 textarea.defaultValue = textarea.value || '';
-                statusElem.textContent = '已保存 ' + now;
-                statusElem.style.color = '#666';
+                statusElem.textContent = '已保存 ' + new Date().toLocaleString();
+                statusElem.style.color = '#2e7d32';
             }).catch(function (error) {
-                console.error('Save error:', error);
                 statusElem.textContent = '保存失败: ' + error.message;
                 statusElem.style.color = '#b00020';
             }).finally(function () {
                 button.disabled = false;
-                button.textContent = '保存';
+                button.textContent = '保存节点订阅';
             });
         }
         ` : ''}
@@ -1014,7 +1040,7 @@ function renderLoginPage(url, error = '') {
     `;
 }
 
-// ================= 新增：专属访客展示页渲染函数 =================
+// 专属访客展示页渲染函数
 function renderGuestPage(url, guest) {
     return `
     <!DOCTYPE html>
@@ -1038,7 +1064,7 @@ function renderGuestPage(url, guest) {
                     ${renderLinkList(getSubscriptionLinks(url, guest, true))}
                 </section>
                 <section class="panel">
-                    <h2 class="section-title">订阅转换配置</h2>
+                    <h2 class="section-title">当前使用配置信息</h2>
                     <div id="subapi-status" class="status-indicator" data-url="${escapeHTML(`${subProtocol}://${subConverter}`)}"></div>
                     <div class="link-list">
                         <div class="link-item">
@@ -1059,12 +1085,12 @@ function renderGuestPage(url, guest) {
     `;
 }
 
-function renderAdminPage(url, content, hasKV, guest, request) {
+function renderAdminPage(url, content, hasKV, guest, settings) {
     return `
     <!DOCTYPE html>
     <html>
         <head>
-            <title>${escapeHTML(FileName)}</title>
+            <title>${escapeHTML(settings.subName)}</title>
             <meta charset="utf-8">
             <meta name="viewport" content="width=device-width, initial-scale=1">
             <style>${getToolStyles()}</style>
@@ -1074,9 +1100,46 @@ function renderAdminPage(url, content, hasKV, guest, request) {
             <div id="copyNotice" class="toast"></div>
             <main class="page">
                 <header class="header">
-                    <h1 class="title">${escapeHTML(FileName)}</h1>
+                    <h1 class="title">${escapeHTML(settings.subName)}</h1>
                     <div class="subtitle">汇聚订阅控制台</div>
                 </header>
+
+                <section class="panel">
+                    <h2 class="section-title">全局设置 (绑定KV空间后生效)</h2>
+                    <div class="field">
+                        <label for="config-subname">站点/订阅名称 (SUBNAME)</label>
+                        <input id="config-subname" type="text" value="${escapeHTML(settings.subName)}" placeholder="例如：CF-Workers-SUB">
+                    </div>
+                    <div class="field">
+                        <label for="config-subapi">订阅转换后端 (SUBAPI)</label>
+                        <input id="config-subapi" type="text" value="${escapeHTML(settings.subApi)}" placeholder="例如：SUBAPI.cmliussss.net">
+                    </div>
+                    <div class="field">
+                        <label for="config-subconfig">转换规则 (SUBCONFIG)</label>
+                        <input id="config-subconfig" type="text" value="${escapeHTML(settings.subConfig)}">
+                    </div>
+                    <div class="field">
+                        <label for="config-noads">去广告关键字 (NOADS) <span class="muted" style="font-weight: normal;font-size:12px;">逗号或换行分隔</span></label>
+                        <textarea id="config-noads" style="min-height: 80px;" placeholder="例如：剩余流量,官网,套餐">${escapeHTML(settings.noAds)}</textarea>
+                    </div>
+                    ${hasKV ? `
+                        <div class="actions">
+                            <button type="button" onclick="saveConfig(this)">保存全局设置</button>
+                            <span id="configSaveStatus" class="muted"></span>
+                        </div>
+                    ` : '<p class="muted">请绑定变量名称为 KV 的 KV 命名空间</p>'}
+                </section>
+
+                <section class="panel">
+                    <h2 class="section-title">汇聚订阅节点编辑</h2>
+                    ${hasKV ? `
+                        <textarea id="content" placeholder="在此输入单节点链接或订阅地址...">${escapeHTML(content)}</textarea>
+                        <div class="actions">
+                            <button type="button" onclick="saveContent(this)">保存节点订阅</button>
+                            <span id="saveStatus" class="muted"></span>
+                        </div>
+                    ` : '<p class="muted">请绑定变量名称为 KV 的 KV 命名空间</p>'}
+                </section>
 
                 <section class="panel">
                     <h2 class="section-title">管理员订阅链接</h2>
@@ -1090,31 +1153,6 @@ function renderAdminPage(url, content, hasKV, guest, request) {
                     ${renderLinkList(getSubscriptionLinks(url, guest, true))}
                 </section>
 
-                <section class="panel">
-                    <h2 class="section-title">汇聚订阅编辑</h2>
-                    ${hasKV ? `
-                        <textarea id="content">${escapeHTML(content)}</textarea>
-                        <div class="actions">
-                            <button type="button" onclick="saveContent(this)">保存</button>
-                            <span id="saveStatus" class="muted"></span>
-                        </div>
-                    ` : '<p class="muted">请绑定变量名称为 KV 的 KV 命名空间</p>'}
-                </section>
-
-                <section class="panel">
-                    <h2 class="section-title">订阅转换配置</h2>
-                    <div id="subapi-status" class="status-indicator" data-url="${escapeHTML(`${subProtocol}://${subConverter}`)}"></div>
-                    <div class="link-list">
-                        <div class="link-item">
-                            <div class="link-label">SUBAPI 后端地址</div>
-                            <a class="link-url" href="${escapeHTML(`${subProtocol}://${subConverter}`)}" target="_blank" rel="noopener noreferrer">${escapeHTML(`${subProtocol}://${subConverter}`)}</a>
-                        </div>
-                        <div class="link-item">
-                            <div class="link-label">SUBCONFIG 转换规则</div>
-                            <a class="link-url" href="${escapeHTML(subConfig)}" target="_blank" rel="noopener noreferrer">${escapeHTML(subConfig)}</a>
-                        </div>
-                    </div>
-                </section>
                 <div id="current-qrcode"></div>
             </main>
             ${renderToolScripts(true)}
@@ -1122,41 +1160,69 @@ function renderAdminPage(url, content, hasKV, guest, request) {
     </html>
     `;
 }
-// =================================================================
 
-async function KV(request, env, txt = 'ADD.txt', guest) {
+async function KV(request, env, txt = 'LINK.txt', guest) {
     const url = new URL(request.url);
+
+    // 设置默认值
+    let settings = {
+        subName: 'CF-Workers-SUB',
+        subApi: 'SUBAPI.cmliussss.net',
+        subConfig: 'https://raw.githubusercontent.com/cmliu/ACL4SSR/main/Clash/config/ACL4SSR_Online_MultiCountry.ini',
+        noAds: ''
+    };
+
+    let hasKV = !!env.KV;
+
+    // 从 KV 提取用户全局设置
+    if (hasKV) {
+        try {
+            const kvConfigStr = await env.KV.get('CONFIG.json');
+            if (kvConfigStr) {
+                settings = { ...settings, ...JSON.parse(kvConfigStr) };
+            }
+        } catch (e) { console.error('提取配置失败', e); }
+    }
+
     try {
         if (request.method === "POST") {
-            if (!env.KV) return new Response("未绑定KV空间", { status: 400 });
+            if (!hasKV) return new Response("未绑定KV空间", { status: 400 });
             try {
-                const content = await request.text();
-                await env.KV.put(txt, content);
-                return new Response("保存成功");
+                // 现支持 JSON 结构传输，拆分更新请求
+                const text = await request.text();
+                try {
+                    const data = JSON.parse(text);
+                    if (data.type === 'config' && data.settings) {
+                        await env.KV.put('CONFIG.json', JSON.stringify(data.settings));
+                        return new Response("设置保存成功");
+                    } else if (data.type === 'content') {
+                        await env.KV.put(txt, data.content || '');
+                        return new Response("订阅保存成功");
+                    }
+                } catch (jsonErr) {
+                    // 向下兼容旧版纯文本保存逻辑
+                    await env.KV.put(txt, text);
+                    return new Response("保存成功");
+                }
             } catch (error) {
-                console.error('保存KV时发生错误:', error);
                 return new Response("保存失败: " + error.message, { status: 500 });
             }
         }
 
         let content = '';
-        let hasKV = !!env.KV;
-
         if (hasKV) {
             try {
                 content = await env.KV.get(txt) || '';
             } catch (error) {
-                console.error('读取KV时发生错误:', error);
                 content = '读取数据时发生错误: ' + error.message;
             }
         }
 
-        const html = renderAdminPage(url, content, hasKV, guest, request);
+        const html = renderAdminPage(url, content, hasKV, guest, settings);
         return new Response(html, {
             headers: { "Content-Type": "text/html;charset=utf-8" }
         });
     } catch (error) {
-        console.error('处理请求时发生错误:', error);
         return new Response("服务器错误: " + error.message, {
             status: 500,
             headers: { "Content-Type": "text/plain;charset=utf-8" }
