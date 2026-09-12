@@ -888,7 +888,6 @@ function getToolStyles() {
         .link-list { display: grid; gap: 10px; }
         .link-item { border: 1px solid rgba(229, 229, 223, 0.6); border-radius: 12px; padding: 12px; background: rgba(255, 255, 255, 0.5); backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px); }
         .link-label { font-weight: 600; margin-bottom: 8px; color: #1a1a1a; }
-        /* 【重要修复】优化长链接强制换行与完整显示 */
         .link-url { display: block; width: 100%; word-wrap: break-word; overflow-wrap: break-word; word-break: break-all; white-space: normal; padding: 10px 10px; border: 1px solid rgba(229, 229, 223, 0.8); border-radius: 8px; background: rgba(250, 250, 250, 0.7); color: #1f4b99; text-decoration: none; transition: all 0.3s ease; }
         .link-url:hover { background: rgba(31, 75, 153, 0.05); border-color: #1f4b99; }
         .actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 10px; }
@@ -900,7 +899,6 @@ function getToolStyles() {
         button:disabled { opacity: 0.65; cursor: default; }
         .field { margin-top: 12px; }
         label { display: block; margin-bottom: 6px; font-weight: 600; color: #1a1a1a; }
-        /* 【重要修复】针对所有输入区域开启长文本完美换行 */
         input, textarea { width: 100%; border: 1px solid rgba(207, 207, 200, 0.6); border-radius: 10px; background: rgba(255, 255, 255, 0.8); color: #202124; font-size: 14px; padding: 10px; transition: border-color 0.2s; word-wrap: break-word; word-break: break-all; white-space: pre-wrap; }
         input:focus, textarea:focus { outline: none; border-color: #3b82f6; background: #fff; }
         input { height: 42px; white-space: normal; }
@@ -916,16 +914,16 @@ function getToolStyles() {
     `;
 }
 
+// ============== 这里已经应用了去掉 ?sub 冗余参数的优化 ==============
 function getSubscriptionLinks(url, token, isGuest = false) {
-    const base = isGuest ? `https://${url.hostname}/sub?token=${token}` : `https://${url.hostname}/${token}`;
-    const subBase = isGuest ? base : `${base}?sub`;
+    const base = `https://${url.hostname}/${token}`;
     return [
-        ['自适应订阅地址', subBase],
-        ['Base64订阅地址', isGuest ? `${base}&b64` : `${base}?b64`],
-        ['Clash订阅地址', isGuest ? `${base}&clash` : `${base}?clash`],
-        ['Sing-box订阅地址', isGuest ? `${base}&sb` : `${base}?sb`],
-        ['Surge订阅地址', isGuest ? `${base}&surge` : `${base}?surge`],
-        ['Loon订阅地址', isGuest ? `${base}&loon` : `${base}?loon`],
+        ['自适应订阅地址', base],
+        ['Base64订阅地址', `${base}?b64`],
+        ['Clash订阅地址', `${base}?clash`],
+        ['Sing-box订阅地址', `${base}?sb`],
+        ['Surge订阅地址', `${base}?surge`],
+        ['Loon订阅地址', `${base}?loon`],
     ];
 }
 
