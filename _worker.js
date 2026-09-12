@@ -77,7 +77,7 @@ export default {
         if (!([mytoken, fakeToken, 访客订阅].includes(token) || url.pathname == ("/" + mytoken) || url.pathname.includes("/" + mytoken + "?") || guestPath)) {
             if (env.URL302) return Response.redirect(env.URL302, 302);
             else if (env.URL) return await proxyURL(env.URL, url);
-            else return new Response(await nginx(), {
+            else return new Response(await nginx(FileName), { // 这里传入了动态的 FileName
                 status: 200,
                 headers: { 'Content-Type': 'text/html; charset=UTF-8' },
             });
@@ -282,14 +282,14 @@ async function ADD(envadd) {
 }
 
 // ================== Apple 拼车业务伪装页 ==================
-async function nginx() {
+async function nginx(titleName) { // 这里接收了外部传进来的 FileName 参数
     const text = `
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Apple 订阅拼车</title>
+    <title>${escapeHTML(titleName)}</title> 
     <meta name="description" content="Apple One、iCloud+ 与 Apple Creator Studio 家庭订阅共享，长期稳定，按月续费。">
     <meta name="keywords" content="Apple One, iCloud+, Apple Creator Studio, 家庭订阅, 订阅拼车">
     <style>
@@ -914,7 +914,6 @@ function getToolStyles() {
     `;
 }
 
-// ============== 这里已经应用了去掉 ?sub 冗余参数的优化 ==============
 function getSubscriptionLinks(url, token, isGuest = false) {
     const base = `https://${url.hostname}/${token}`;
     return [
