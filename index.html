@@ -94,26 +94,22 @@ export default {
             if (env.URL302) return Response.redirect(env.URL302, 302);
             else if (env.URL) return await proxyURL(env.URL, url);
             else {
-                // =============== 极简净空抓取本地 html 文件 ===============
-                let htmlResponse = null;
+                // =============== 强制纯净抓取 Pages 根目录下的 index.html ===============
                 if (env.ASSETS) {
                     try {
-                        const indexUrl = new URL('/index.html', request.url).toString();
-                        let res = await env.ASSETS.fetch(new Request(indexUrl));
-                        if (res.status === 200 || res.status === 304) {
-                            htmlResponse = res;
-                        } else {
-                            const rootUrl = new URL('/', request.url).toString();
-                            res = await env.ASSETS.fetch(new Request(rootUrl));
-                            if (res.status === 200 || res.status === 304) htmlResponse = res;
+                        // 构造一个绝对纯净的 GET 请求，抛弃所有可能导致 304 或路由迷失的原请求头部
+                        let res = await env.ASSETS.fetch(new Request(url.origin + "/", { method: 'GET' }));
+                        if (!res.ok) {
+                            res = await env.ASSETS.fetch(new Request(url.origin + "/index.html", { method: 'GET' }));
                         }
-                    } catch (e) { console.error('ASSETS Fetch Error:', e); }
-                }
-
-                if (htmlResponse) {
-                    let html = await htmlResponse.text();
-                    html = html.replace(/<title>.*?<\/title>/i, `<title>${escapeHTML(FileName)}</title>`);
-                    return new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=UTF-8' } });
+                        if (res.ok) {
+                            let html = await res.text();
+                            html = html.replace(/<title>.*?<\/title>/i, `<title>${escapeHTML(FileName)}</title>`);
+                            return new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=UTF-8' } });
+                        }
+                    } catch (e) {
+                        console.error('ASSETS Fetch Error:', e);
+                    }
                 }
                 
                 // CF Workers 部署无 index.html 或抓取彻底失败时兜底原生 nginx 页面
@@ -272,7 +268,7 @@ export default {
             const utf8Encoder = new TextEncoder();
             const text = new TextDecoder().decode(utf8Encoder.encode(req_data));
 
-            // 去广告过滤 (支持英文逗号、空格、换行分隔)
+            // 去广告过滤
             let adKeywords = [];
             let filteredLines = text.split('\n');
             if (config_noAds) {
@@ -577,17 +573,17 @@ function getToolStyles() {
             input, textarea { background: rgba(20, 20, 20, 0.8); color: #fff; border-color: rgba(255,255,255,0.2); }
             input:focus, textarea:focus { background: #000; border-color: #3b82f6; }
             
-            /* 修复深色模式按钮样式，增加辨识度 */
-            button { background: rgba(80, 80, 80, 0.9); border-color: rgba(255, 255, 255, 0.2); color: #fff; }
-            button:hover { background: rgba(100, 100, 100, 1); box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3); }
-            button.secondary { background: rgba(50, 50, 50, 0.8); color: #e0e0e0; border-color: rgba(255, 255, 255, 0.15); }
-            button.secondary:hover { background: rgba(70, 70, 70, 0.95); color: #fff; }
-            button.danger { background: rgba(211, 47, 47, 0.8); border-color: rgba(211, 47, 47, 0.2); }
-            button.danger:hover { background: rgba(211, 47, 47, 1); }
+            /* 彻底修复深色模式按钮样式，增加高亮辨识度 */
+            button { background: rgba(100, 100, 100, 0.9); border-color: rgba(255, 255, 255, 0.3); color: #fff; box-shadow: 0 2px 6px rgba(0,0,0,0.2); }
+            button:hover { background: rgba(120, 120, 120, 1); border-color: rgba(255, 255, 255, 0.5); box-shadow: 0 4px 12px rgba(255, 255, 255, 0.1); }
+            button.secondary { background: rgba(60, 60, 60, 0.8); color: #e0e0e0; border-color: rgba(255, 255, 255, 0.2); }
+            button.secondary:hover { background: rgba(80, 80, 80, 0.95); color: #fff; border-color: rgba(255, 255, 255, 0.4); }
+            button.danger { background: rgba(211, 47, 47, 0.9); border-color: rgba(255, 100, 100, 0.3); color: #fff; }
+            button.danger:hover { background: rgba(230, 50, 50, 1); border-color: rgba(255, 100, 100, 0.6); box-shadow: 0 4px 12px rgba(211, 47, 47, 0.3); }
             
-            .status-ok { background: rgba(129, 199, 132, 0.1); color: #81c784; border-color: rgba(129, 199, 132, 0.2); }
-            .status-warn { background: rgba(255, 183, 77, 0.1); color: #ffb74d; border-color: rgba(255, 183, 77, 0.2); }
-            .status-error { background: rgba(229, 115, 115, 0.1); color: #e57373; border-color: rgba(229, 115, 115, 0.2); }
+            .status-ok { background: rgba(129, 199, 132, 0.15); color: #81c784; border-color: rgba(129, 199, 132, 0.3); }
+            .status-warn { background: rgba(255, 183, 77, 0.15); color: #ffb74d; border-color: rgba(255, 183, 77, 0.3); }
+            .status-error { background: rgba(229, 115, 115, 0.15); color: #e57373; border-color: rgba(229, 115, 115, 0.3); }
             .modal-content { background: rgba(30, 30, 30, 0.95); border-color: rgba(255, 255, 255, 0.1); }
             #current-qrcode { background: rgba(255, 255, 255, 0.9); } 
         }
