@@ -94,16 +94,21 @@ export default {
             if (env.URL302) return Response.redirect(env.URL302, 302);
             else if (env.URL) return await proxyURL(env.URL, url);
             else {
+                // 优先尝试读取 Pages 同目录下的 index.html 用于正规页面渲染
                 if (env.ASSETS) {
                     try {
-                        let assetRes = await env.ASSETS.fetch(new Request(url.origin + '/index.html', request));
-                        if (assetRes.status === 200) {
+                        const assetReq = new Request(new URL('/index.html', request.url), request);
+                        let assetRes = await env.ASSETS.fetch(assetReq);
+                        if (assetRes.status === 200 || assetRes.status === 304) {
                             let html = await assetRes.text();
                             html = html.replace(/<title>.*?<\/title>/i, `<title>${escapeHTML(FileName)}</title>`);
                             return new Response(html, { status: 200, headers: { 'Content-Type': 'text/html; charset=UTF-8' } });
                         }
-                    } catch (e) {}
+                    } catch (e) {
+                        console.error('ASSETS Fetch failed:', e);
+                    }
                 }
+                // CF Workers 部署无 index.html 或读取失败时兜底
                 return new Response(await nginx(FileName), { status: 200, headers: { 'Content-Type': 'text/html; charset=UTF-8' } });
             }
         } else {
@@ -647,7 +652,7 @@ function renderToolScripts(includeEditor = false) {
                 body: JSON.stringify({ type: 'config', settings: {
                     guest: secGuest,
                     user: secUser,
-                    pass: secPass,
+                    pass: secPass, // 只有在前端填了内容才会传实际密码，留空则传空字符串给后端处理
                     subName: document.getElementById('config-subname').value,
                     subApi: document.getElementById('config-subapi').value,
                     subConfig: document.getElementById('config-subconfig').value,
@@ -660,7 +665,7 @@ function renderToolScripts(includeEditor = false) {
             }).then(function () {
                 statusElem.textContent = '已保存 ' + new Date().toLocaleString(); 
                 statusElem.style.color = 'var(--coral, #2e7d32)';
-                // 防止刷新过快导致 Load failed，等待 500ms
+                // 防止刷新过快导致 Load failed，延时重载
                 setTimeout(() => window.location.reload(), 500); 
             }).catch(function (err) { 
                 statusElem.textContent = '保存失败: 网络异常或超时'; 
@@ -669,7 +674,7 @@ function renderToolScripts(includeEditor = false) {
             })
             .finally(function () { 
                 button.disabled = false; 
-                button.textContent = button.id === 'saveSecBtn' ? '保存安全设置' : '保存全局设置并重载'; 
+                button.textContent = button.id === 'saveSecBtn' ? '保存修改' : '保存全局设置并重载'; 
             });
         }
         function saveContent(button) {
@@ -764,8 +769,8 @@ function renderAdminPage(url, content, hasKV, settings, apiStatus, configStatus,
             <h2 class="section-title" style="font-size: 20px; margin-bottom: 20px;">🛡️ 账户与安全设置</h2>
             <div class="field"><label>访客订阅入口 (GUEST)</label><input id="sec-guest" type="text" value="${escapeHTML(settings.guest || '')}" placeholder="留空则按内置算法自动生成"></div>
             <div class="field"><label>后台登录账号 (USER)</label><input id="sec-user" type="text" value="${escapeHTML(settings.user || '')}" placeholder="例如：admin"></div>
-            <div class="field"><label>后台登录密码 (PASS)</label><input id="sec-pass" type="password" value="${escapeHTML(settings.pass || '')}" placeholder="输入新密码"></div>
-            <div class="field"><label>确认登录密码</label><input id="sec-pass2" type="password" value="${escapeHTML(settings.pass || '')}" placeholder="再次输入密码"></div>
+            <div class="field"><label>后台登录密码 (PASS)</label><input id="sec-pass" type="password" value="" placeholder="留空则不修改当前密码"></div>
+            <div class="field"><label>确认登录密码</label><input id="sec-pass2" type="password" value="" placeholder="留空则不修改当前密码"></div>
             <div class="actions" style="margin-top: 24px; justify-content: flex-end;">
                 <button type="button" class="secondary" onclick="closeSecurityModal()">取消</button>
                 <button type="button" id="saveSecBtn" onclick="saveConfig(this)">保存修改</button>
@@ -847,6 +852,17 @@ async function KV(request, env, txt, guest, apiStatus, configStatus, currentApiU
             try {
                 const data = JSON.parse(text);
                 if (data.type === 'config') { 
+                    
+                    // 如果前端传过来的密码是空的，就保留 KV 里原有的密码
+                    if (!data.settings.pass) {
+                        let oldConfig = {};
+                        try {
+                            const oldKvStr = await env.KV.get('CONFIG.json');
+                            if (oldKvStr) oldConfig = JSON.parse(oldKvStr);
+                        } catch(e) {}
+                        data.settings.pass = oldConfig.pass || '';
+                    }
+
                     await env.KV.put('CONFIG.json', JSON.stringify(data.settings)); 
                     return new Response("设置保存成功"); 
                 } 
