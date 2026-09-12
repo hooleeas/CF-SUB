@@ -121,8 +121,8 @@ export default {
                                 return new Response(renderLoginPage(url), { headers: { 'Content-Type': 'text/html;charset=utf-8', 'Cache-Control': 'no-store' }});
                             }
                         }
-                        // 管理员访问：传入检测状态展示
-                        return await KV(request, env, 'LINK.txt', 访客订阅, apiOk, configOk);
+                        // 管理员访问：传入检测状态及当前正在检测的配置进行展示
+                        return await KV(request, env, 'LINK.txt', 访客订阅, apiOk, configOk, subConverter, subConfig);
                     }
                 } else {
                     MainData = await env.KV.get('LINK.txt') || MainData;
@@ -282,7 +282,7 @@ async function ADD(envadd) {
 }
 
 // ================== Apple 拼车业务伪装页 ==================
-async function nginx(titleName) { // 这里接收了外部传进来的 FileName 参数
+async function nginx(titleName) {
     const text = `
 <!DOCTYPE html>
 <html lang="zh-CN">
@@ -1010,22 +1010,22 @@ function renderGuestPage(url, guest, displayApiUrl, displayConfig) {
     return `<!DOCTYPE html><html><head><title>${escapeHTML(FileName)} 访客订阅</title><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${getToolStyles()}</style><script src="https://cdn.jsdelivr.net/npm/@keeex/qrcodejs-kx@1.0.2/qrcode.min.js"></script></head><body><div id="copyNotice" class="toast"></div><main class="page"><header class="header"><h1 class="title">${escapeHTML(FileName)} 访客订阅</h1><div class="subtitle">复制订阅链接或生成二维码</div></header><section class="panel"><h2 class="section-title">订阅链接</h2>${renderLinkList(getSubscriptionLinks(url, guest, true))}</section><section class="panel"><h2 class="section-title">当前提供服务的真实转换配置</h2><div class="section-note">已剥离失效设置，所展示即为实际输出数据的接口链路</div><div class="link-list"><div class="link-item"><div class="link-label">正在使用的 SUBAPI 后端</div><a class="link-url" href="${escapeHTML(displayApiUrl)}" target="_blank">${escapeHTML(displayApiUrl)}</a></div><div class="link-item"><div class="link-label">正在使用的 SUBCONFIG 规则</div><a class="link-url" href="${escapeHTML(displayConfig)}" target="_blank">${escapeHTML(displayConfig)}</a></div></div></section><div id="current-qrcode"></div></main>${renderToolScripts(false)}</body></html>`;
 }
 
-function renderAdminPage(url, content, hasKV, guest, settings, apiOk, configOk) {
+function renderAdminPage(url, content, hasKV, guest, settings, apiOk, configOk, currentApi, currentConfig) {
     return `<!DOCTYPE html><html><head><title>${escapeHTML(settings.subName)}</title><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><style>${getToolStyles()}</style><script src="https://cdn.jsdelivr.net/npm/@keeex/qrcodejs-kx@1.0.2/qrcode.min.js"></script></head><body><div id="copyNotice" class="toast"></div><main class="page"><header class="header"><h1 class="title">${escapeHTML(settings.subName)}</h1><div class="subtitle">汇聚订阅控制台</div></header>
 
     <section class="panel">
         <h2 class="section-title">订阅转换引擎检测状态</h2>
         <div class="status-indicator ${apiOk ? 'status-ok' : 'status-error'}">
-            ${apiOk ? `✅ SUBAPI 正常连通 (${escapeHTML(settings.subApi)})` : `❌ 自定义 SUBAPI 无法连通，现已启用容灾回退 (${escapeHTML(defaultSubConverter)})`}
+            ${apiOk ? `✅ SUBAPI 正常连通 (${escapeHTML(currentApi)})` : `❌ 配置的后端无法连通 (${escapeHTML(currentApi)})，现已启用容灾回退 (${escapeHTML(defaultSubConverter)})`}
         </div>
         <div class="status-indicator ${configOk ? 'status-ok' : 'status-error'}">
-            ${configOk ? `✅ SUBCONFIG 规则链路有效` : `❌ 自定义规则无法读取，现已启用容灾回退 (默认规则)`}
+            ${configOk ? `✅ SUBCONFIG 规则链路有效` : `❌ 配置的规则无法读取，现已启用容灾回退 (默认规则)`}
         </div>
     </section>
 
     <section class="panel">
         <h2 class="section-title">全局设置 (绑定KV空间后生效)</h2>
-        <div class="field"><label for="config-subname">站点/订阅名称 (SUBNAME)</label><input id="config-subname" type="text" value="${escapeHTML(settings.subName)}"></div>
+        <div class="field"><label for="config-subname">站点/订阅名称 (SUBNAME)</label><input id="config-subname" type="text" value="${escapeHTML(settings.subName)}" placeholder="例如：CF-Workers-SUB"></div>
         <div class="field"><label for="config-subapi">订阅转换后端 (SUBAPI)</label><input id="config-subapi" type="text" value="${escapeHTML(settings.subApi)}" placeholder="例如：SUBAPI.cmliussss.net"></div>
         <div class="field"><label for="config-subconfig">转换规则 (SUBCONFIG)</label><textarea id="config-subconfig" style="min-height:80px">${escapeHTML(settings.subConfig)}</textarea></div>
         <div class="field"><label for="config-noads">去广告关键字 (NOADS) <span class="muted" style="font-weight: normal;">逗号或换行分隔</span></label><textarea id="config-noads" style="min-height: 80px;" placeholder="剩余流量,官网,套餐">${escapeHTML(settings.noAds)}</textarea></div>
@@ -1038,24 +1038,52 @@ function renderAdminPage(url, content, hasKV, guest, settings, apiOk, configOk) 
     <div id="current-qrcode"></div></main>${renderToolScripts(true)}</body></html>`;
 }
 
-async function KV(request, env, txt, guest, apiOk, configOk) {
-    let settings = { subName: 'CF-Workers-SUB', subApi: defaultSubConverter, subConfig: defaultSubConfig, noAds: '' };
+async function KV(request, env, txt, guest, apiOk, configOk, currentApi, currentConfig) {
+    let settings = { subName: 'CF-Workers-SUB', subApi: '', subConfig: '', noAds: '' };
     let hasKV = !!env.KV;
+    
     if (hasKV) {
-        try { const kvConfigStr = await env.KV.get('CONFIG.json'); if (kvConfigStr) settings = { ...settings, ...JSON.parse(kvConfigStr) }; } catch (e) {}
+        try { 
+            const kvConfigStr = await env.KV.get('CONFIG.json'); 
+            if (kvConfigStr) settings = { ...settings, ...JSON.parse(kvConfigStr) }; 
+        } catch (e) {}
     }
+
     try {
         if (request.method === "POST") {
             if (!hasKV) return new Response("未绑定KV空间", { status: 400 });
+            
+            // 【关键修复】拦截非 JSON 格式的恶意/误导表单提交（如二次登录覆盖）
+            const contentType = request.headers.get('content-type') || '';
+            if (contentType.includes('application/x-www-form-urlencoded')) {
+                return Response.redirect(request.url, 302);
+            }
+
             const text = await request.text();
             try {
                 const data = JSON.parse(text);
-                if (data.type === 'config') { await env.KV.put('CONFIG.json', JSON.stringify(data.settings)); return new Response("设置保存成功"); } 
-                else if (data.type === 'content') { await env.KV.put(txt, data.content || ''); return new Response("订阅保存成功"); }
-            } catch (jsonErr) { await env.KV.put(txt, text); return new Response("保存成功"); }
+                if (data.type === 'config') { 
+                    await env.KV.put('CONFIG.json', JSON.stringify(data.settings)); 
+                    return new Response("设置保存成功"); 
+                } 
+                else if (data.type === 'content') { 
+                    await env.KV.put(txt, data.content || ''); 
+                    return new Response("订阅保存成功"); 
+                }
+            } catch (jsonErr) { 
+                // 仅用于向下兼容的旧版存储方式，现已被 JSON 格式取代
+                return new Response("不支持的数据格式", { status: 400 }); 
+            }
         }
+        
         let content = '';
         if (hasKV) try { content = await env.KV.get(txt) || ''; } catch (error) { content = '读取数据时发生错误'; }
-        return new Response(renderAdminPage(new URL(request.url), content, hasKV, guest, settings, apiOk, configOk), { headers: { "Content-Type": "text/html;charset=utf-8" } });
-    } catch (error) { return new Response("服务器错误: " + error.message, { status: 500 }); }
+        
+        return new Response(
+            renderAdminPage(new URL(request.url), content, hasKV, guest, settings, apiOk, configOk, currentApi, currentConfig), 
+            { headers: { "Content-Type": "text/html;charset=utf-8" } }
+        );
+    } catch (error) { 
+        return new Response("服务器错误: " + error.message, { status: 500 }); 
+    }
 }
