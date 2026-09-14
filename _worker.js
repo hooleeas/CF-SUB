@@ -24,6 +24,14 @@ let subConfig = defaultSubConfig;
 let subProtocol = defaultSubProtocol;
 let config_noAds = '';
 
+// ================== 伪装页面配置 ==================
+// off：原生 Nginx；url：反向代理；url302：302 定向；html：自定义 HTML
+let disguiseMode = 'off';
+let disguiseURL = '';
+let disguiseURL302 = '';
+let disguiseHTML = '';
+// =================================================
+
 export default {
     async fetch(request, env) {
         const userAgentHeader = request.headers.get('User-Agent');
@@ -34,6 +42,15 @@ export default {
         mytoken = env.TOKEN || mytoken;
         let adminUser = env.USER || '';
         let adminPass = env.PASS || '';
+
+        // 每次请求重置动态配置，避免 Worker 实例复用导致上一请求配置串到下一请求。
+        subConverter = defaultSubConverter;
+        subConfig = defaultSubConfig;
+        subProtocol = defaultSubProtocol;
+        disguiseMode = 'off';
+        disguiseURL = '';
+        disguiseURL302 = '';
+        disguiseHTML = '';
 
         // 处理退出登录
         if (url.searchParams.has('logout')) {
@@ -49,29 +66,33 @@ export default {
         // 从 KV 获取动态设置的变量
         if (env.KV) {
             const kvConfigStr = await env.KV.get('CONFIG.json');
-
             if (kvConfigStr) {
                 try {
                     const kvConfig = JSON.parse(kvConfigStr);
 
                     FileName = kvConfig.subName || FileName;
 
-                    // 后台输入框保持为空表示使用默认值
+                    // SUBAPI / SUBCONFIG 留空时保持为空，由后面的有效配置逻辑决定是否使用默认值
                     subConverter = kvConfig.subApi || '';
                     subConfig = kvConfig.subConfig || '';
 
                     config_noAds = kvConfig.noAds || '';
+
+                    // 伪装页
+                    disguiseMode = kvConfig.disguiseMode || 'off';
+                    disguiseURL = kvConfig.disguiseURL || '';
+                    disguiseURL302 = kvConfig.disguiseURL302 || '';
+                    disguiseHTML = kvConfig.disguiseHTML || '';
+
                     guestToken = kvConfig.guest || guestToken;
                     adminUser = kvConfig.user || adminUser;
                     adminPass = kvConfig.pass || adminPass;
-
                 } catch (e) {
                     console.error('解析 KV 配置失败', e);
                 }
             }
         }
 
-        // 保存后台填写的原始配置状态
         const customSubApi = String(subConverter || '').trim();
         const customSubConfig = String(subConfig || '').trim();
 
@@ -89,35 +110,18 @@ export default {
             subConverter = subConverter.split("//")[1] || subConverter;
         }
 
-        // 实际使用配置
-        const effectiveSubConverter =
-            hasCustomApi
-                ? subConverter
-                : defaultSubConverter;
-
-        const effectiveSubProtocol =
-            hasCustomApi
-                ? subProtocol
-                : defaultSubProtocol;
-
-        const effectiveSubConfig =
-            hasCustomConfig
-                ? subConfig
-                : defaultSubConfig;
+        // 实际转换使用的配置
+        const effectiveSubConverter = hasCustomApi ? subConverter : defaultSubConverter;
+        const effectiveSubProtocol = hasCustomApi ? subProtocol : defaultSubProtocol;
+        const effectiveSubConfig = hasCustomConfig ? subConfig : defaultSubConfig;
 
         const currentDate = new Date();
         currentDate.setHours(0, 0, 0, 0);
+        const timeTemp = Math.ceil(currentDate.getTime() / 1000);
 
-        const timeTemp =
-            Math.ceil(currentDate.getTime() / 1000);
+        const fakeToken = await MD5MD5(`${mytoken}${timeTemp}`);
 
-        const fakeToken =
-            await MD5MD5(`${mytoken}${timeTemp}`);
-
-        guestToken =
-            env.GUESTTOKEN ||
-            env.GUEST ||
-            guestToken;
+        guestToken = env.GUESTTOKEN || env.GUEST || guestToken;
 
         if (!guestToken) {
             guestToken = await MD5MD5(mytoken);
@@ -127,23 +131,17 @@ export default {
 
         const guestPath =
             url.pathname === ("/" + 访客订阅) ||
-            url.pathname.toLowerCase() ===
-            ("/" + 访客订阅.toLowerCase());
+            url.pathname.toLowerCase() === ("/" + 访客订阅.toLowerCase());
 
         let UD = Math.floor(
-            ((timestamp - Date.now()) /
-                timestamp *
-                total *
-                1099511627776) / 2
+            ((timestamp - Date.now()) / timestamp * total * 1099511627776) / 2
         );
 
         total = total * 1099511627776;
 
-        let expire =
-            Math.floor(timestamp / 1000);
+        let expire = Math.floor(timestamp / 1000);
 
-        SUBUpdateTime =
-            env.SUBUPTIME || SUBUpdateTime;
+        SUBUpdateTime = env.SUBUPTIME || SUBUpdateTime;
 
         const isProxyClientUA = [
             'clash',
@@ -159,219 +157,108 @@ export default {
             'v2rayng',
             'shadowrocket',
             'subconverter'
-        ].some(keyword =>
-            userAgent.includes(keyword)
-        );
+        ].some(keyword => userAgent.includes(keyword));
 
-        // 无效路径优先返回静态首页
-        if (!(
-            [mytoken, fakeToken, 访客订阅].includes(token) ||
-            url.pathname == ("/" + mytoken) ||
-            url.pathname.includes("/" + mytoken + "?") ||
-            guestPath
-        )) {
+        // =========================================================
+        // 非合法路径：按照管理员设置的伪装页面模式处理
+        // =========================================================
+        if (
+            !(
+                [mytoken, fakeToken, 访客订阅].includes(token) ||
+                url.pathname == ("/" + mytoken) ||
+                url.pathname.includes("/" + mytoken + "?") ||
+                guestPath
+            )
+        ) {
+            const disguise = await resolveDisguisePage(request, url, {
+                mode: disguiseMode,
+                url: disguiseURL || env.URL || '',
+                url302: disguiseURL302 || env.URL302 || '',
+                html: disguiseHTML,
+                title: FileName
+            });
 
-            if (env.ASSETS) {
-                try {
-                    const assetReq = new Request(
-                        new URL('/', request.url),
-                        {
-                            method: 'GET',
-                            headers: {
-                                'Accept':
-                                    'text/html,application/xhtml+xml'
-                            }
-                        }
-                    );
-
-                    const assetRes =
-                        await env.ASSETS.fetch(assetReq);
-
-                    if (assetRes.ok) {
-                        const contentType =
-                            assetRes.headers.get('content-type') || '';
-
-                        if (contentType.includes('text/html')) {
-                            let html =
-                                await assetRes.text();
-
-                            const title =
-                                `<title>${escapeHTML(FileName)}</title>`;
-
-                            // 有 title 就替换
-                            if (/<title\b[^>]*>[\s\S]*?<\/title>/i.test(html)) {
-                                html = html.replace(
-                                    /<title\b[^>]*>[\s\S]*?<\/title>/i,
-                                    title
-                                );
-
-                            // 没有 title，但有 head，就插入
-                            } else if (/<head\b[^>]*>/i.test(html)) {
-                                html = html.replace(
-                                    /<head\b[^>]*>/i,
-                                    match => match + title
-                                );
-
-                            // 连 head 都没有，直接放在最前面
-                            } else {
-                                html = title + html;
-                            }
-
-                            const headers =
-                                new Headers(assetRes.headers);
-
-                            headers.set(
-                                'Content-Type',
-                                'text/html; charset=UTF-8'
-                            );
-
-                            return new Response(
-                                html,
-                                {
-                                    status: assetRes.status,
-                                    headers
-                                }
-                            );
-                        }
-
-                        return assetRes;
-                    }
-
-                } catch (e) {
-                    console.error(
-                        'ASSETS Fetch failed:',
-                        e
-                    );
-                }
-            }
-
-            if (env.URL302) {
-                return Response.redirect(
-                    env.URL302,
-                    302
-                );
-            }
-
-            if (env.URL) {
-                return await proxyURL(
-                    env.URL,
-                    url
-                );
-            }
-
-            return new Response(
-                await nginx(FileName),
-                {
-                    status: 200,
-                    headers: {
-                        'Content-Type':
-                            'text/html; charset=UTF-8'
-                    }
-                }
-            );
+            return disguise.response;
         } else {
 
             if (env.KV) {
+                await 迁移地址列表(env, 'LINK.txt');
 
-                await 迁移地址列表(
-                    env,
-                    'LINK.txt'
-                );
-
-                // 浏览器直接访问 UI
+                // =====================================================
+                // 浏览器直接访问 UI 逻辑
+                // =====================================================
                 if (
                     userAgent.includes('mozilla') &&
                     !url.search &&
                     !isProxyClientUA
                 ) {
 
-                    // ================= 后端连通性与规则有效性 =================
-
+                    // ================= 后端连通性与规则有效性检测 =================
                     let apiStatus = 'warn';
                     let configStatus = 'warn';
+
                     let apiVersion = '';
 
-                    let targetApi =
-                        defaultSubConverter;
+                    let apiDefaultOk = false;
+                    let configDefaultOk = false;
 
-                    let targetProtocol =
-                        defaultSubProtocol;
+                    let targetApi = defaultSubConverter;
+                    let targetProtocol = defaultSubProtocol;
+                    let targetConfig = defaultSubConfig;
 
-                    let targetConfig =
-                        defaultSubConfig;
+                    async function probeApi(api, protocol) {
+                        if (!api) return { ok: false };
 
-                    async function probeApi(
-                        api,
-                        protocol
-                    ) {
                         try {
-                            const controller =
-                                new AbortController();
+                            const controller = new AbortController();
+                            const timeout = setTimeout(
+                                () => controller.abort(),
+                                1200
+                            );
 
-                            const timeout =
-                                setTimeout(
-                                    () => controller.abort(),
-                                    1200
-                                );
-
-                            const res =
-                                await fetch(
-                                    `${protocol}://${api}/version`,
-                                    {
-                                        signal:
-                                            controller.signal
-                                    }
-                                );
+                            const res = await fetch(
+                                `${protocol}://${api}/version`,
+                                {
+                                    signal: controller.signal
+                                }
+                            );
 
                             clearTimeout(timeout);
 
                             if (res.ok) {
                                 return {
                                     ok: true,
-                                    version:
-                                        (await res.text())
-                                            .trim()
-                                            .substring(0, 30)
+                                    version: (await res.text())
+                                        .trim()
+                                        .substring(0, 30)
                                 };
                             }
 
-                            return {
-                                ok: false
-                            };
+                            return { ok: false };
 
                         } catch (e) {
-                            return {
-                                ok: false
-                            };
+                            return { ok: false };
                         }
                     }
 
-                    async function probeConfig(
-                        configUrl
-                    ) {
-                        if (!configUrl) {
-                            return false;
-                        }
+                    async function probeConfig(configUrl) {
+                        if (!configUrl) return false;
 
                         try {
-                            const controller =
-                                new AbortController();
+                            const controller = new AbortController();
 
-                            const timeout =
-                                setTimeout(
-                                    () => controller.abort(),
-                                    1200
-                                );
+                            const timeout = setTimeout(
+                                () => controller.abort(),
+                                1200
+                            );
 
-                            const res =
-                                await fetch(
-                                    configUrl,
-                                    {
-                                        method: 'GET',
-                                        signal:
-                                            controller.signal
-                                    }
-                                );
+                            const res = await fetch(
+                                configUrl,
+                                {
+                                    method: 'GET',
+                                    signal: controller.signal
+                                }
+                            );
 
                             clearTimeout(timeout);
 
@@ -382,68 +269,126 @@ export default {
                         }
                     }
 
-                    // ================= SUBAPI =================
+                    // =====================================================
+                    // 先检测默认值
+                    // 默认值是否可用决定了自定义配置失效后能否继续工作
+                    // =====================================================
+
+                    const defaultApiResult =
+                        await probeApi(
+                            defaultSubConverter,
+                            defaultSubProtocol
+                        );
+
+                    apiDefaultOk = defaultApiResult.ok;
+
+                    const defaultConfigResult =
+                        await probeConfig(defaultSubConfig);
+
+                    configDefaultOk = defaultConfigResult;
+
+                    // =====================================================
+                    // SUBAPI 状态
+                    //
+                    // 空：
+                    // ⚠️SUBAPI为空 已切换为默认配置 ✅默认值可用
+                    //
+                    // 自定义无效：
+                    // ⚠️SUBAPI无效 已切换为默认配置 ✅默认值可用
+                    //
+                    // 自定义有效：
+                    // ✅SUBAPI状态正常 (版本)
+                    //
+                    // 默认也失效：
+                    // ❌SUBAPI无效待维护
+                    // =====================================================
 
                     if (hasCustomApi) {
 
-                        const res =
+                        const customResult =
                             await probeApi(
                                 subConverter,
                                 subProtocol
                             );
 
-                        if (res.ok) {
+                        if (customResult.ok) {
+
                             apiStatus = 'ok';
-                            apiVersion = res.version;
+                            apiVersion = customResult.version;
 
-                            targetApi =
-                                subConverter;
+                            targetApi = subConverter;
+                            targetProtocol = subProtocol;
 
-                            targetProtocol =
-                                subProtocol;
+                        } else if (apiDefaultOk) {
+
+                            apiStatus = 'invalid';
+
+                            // 这里仍然可以显示默认 API 的版本，
+                            // 但状态文字由页面统一显示为“默认值可用”
+                            apiVersion = defaultApiResult.version;
+
+                            targetApi = defaultSubConverter;
+                            targetProtocol = defaultSubProtocol;
+
+                        } else {
+
+                            apiStatus = 'error';
+
+                            targetApi = defaultSubConverter;
+                            targetProtocol = defaultSubProtocol;
                         }
+
+                    } else if (apiDefaultOk) {
+
+                        apiStatus = 'empty';
+
+                        apiVersion = defaultApiResult.version;
+
+                        targetApi = defaultSubConverter;
+                        targetProtocol = defaultSubProtocol;
 
                     } else {
 
-                        // 输入框为空时检测默认值
-                        const res =
-                            await probeApi(
-                                defaultSubConverter,
-                                defaultSubProtocol
-                            );
+                        apiStatus = 'error';
 
-                        if (res.ok) {
-                            apiVersion =
-                                res.version;
-                        }
+                        targetApi = defaultSubConverter;
+                        targetProtocol = defaultSubProtocol;
                     }
 
-                    // ================= SUBCONFIG =================
+                    // =====================================================
+                    // SUBCONFIG 状态
+                    // =====================================================
 
                     if (hasCustomConfig) {
 
-                        const ok =
-                            await probeConfig(
-                                subConfig
-                            );
+                        const customOk =
+                            await probeConfig(subConfig);
 
-                        if (ok) {
+                        if (customOk) {
+
                             configStatus = 'ok';
-                            targetConfig =
-                                subConfig;
+                            targetConfig = subConfig;
+
+                        } else if (configDefaultOk) {
+
+                            configStatus = 'invalid';
+                            targetConfig = defaultSubConfig;
+
+                        } else {
+
+                            configStatus = 'error';
+                            targetConfig = defaultSubConfig;
                         }
+
+                    } else if (configDefaultOk) {
+
+                        configStatus = 'empty';
+                        targetConfig = defaultSubConfig;
 
                     } else {
 
-                        // 输入框为空时检测默认值
-                        const ok =
-                            await probeConfig(
-                                defaultSubConfig
-                            );
-
-                        if (ok) {
-                            configStatus = 'warn';
-                        }
+                        configStatus = 'error';
+                        targetConfig = defaultSubConfig;
                     }
 
                     const currentApiUrl =
@@ -452,7 +397,7 @@ export default {
                     const currentConfigUrl =
                         targetConfig;
 
-                    // ========================================================
+                    // =====================================================
 
                     if (guestPath) {
 
@@ -493,10 +438,7 @@ export default {
 
                             if (!isLoggedIn) {
 
-                                if (
-                                    request.method ===
-                                    'POST'
-                                ) {
+                                if (request.method === 'POST') {
                                     return await handleAdminLogin(
                                         request,
                                         url,
@@ -536,23 +478,24 @@ export default {
                 } else {
 
                     MainData =
-                        await env.KV.get(
-                            'LINK.txt'
-                        ) || MainData;
+                        await env.KV.get('LINK.txt') ||
+                        MainData;
                 }
 
             } else {
 
                 MainData =
-                    env.LINK || MainData;
+                    env.LINK ||
+                    MainData;
 
                 if (env.LINKSUB) {
-                    urls =
-                        await ADD(
-                            env.LINKSUB
-                        );
+                    urls = await ADD(env.LINKSUB);
                 }
             }
+
+            // =====================================================
+            // 汇总订阅
+            // =====================================================
 
             let 重新汇总所有链接 =
                 await ADD(
@@ -564,49 +507,38 @@ export default {
             let 自建节点 = "";
             let 订阅链接 = "";
 
-            for (
-                let x of 重新汇总所有链接
-            ) {
+            for (let x of 重新汇总所有链接) {
 
                 if (
-                    x.toLowerCase()
-                        .startsWith('http')
+                    x.toLowerCase().startsWith('http')
                 ) {
-                    订阅链接 +=
-                        x + '\n';
+                    订阅链接 += x + '\n';
                 } else {
-                    自建节点 +=
-                        x + '\n';
+                    自建节点 += x + '\n';
                 }
             }
 
-            MainData =
-                自建节点;
+            MainData = 自建节点;
 
-            urls =
-                await ADD(订阅链接);
+            urls = await ADD(订阅链接);
 
             const isSubConverterRequest =
-                request.headers.get(
-                    'subconverter-request'
-                ) ||
-                request.headers.get(
-                    'subconverter-version'
-                ) ||
-                userAgent.includes(
-                    'subconverter'
-                );
+                request.headers.get('subconverter-request') ||
+                request.headers.get('subconverter-version') ||
+                userAgent.includes('subconverter');
 
             let 订阅格式 = 'base64';
 
-            if (!(
-                userAgent.includes('null') ||
-                isSubConverterRequest ||
-                userAgent.includes('nekobox') ||
-                userAgent.includes(
-                    ('CF-SUB').toLowerCase()
+            if (
+                !(
+                    userAgent.includes('null') ||
+                    isSubConverterRequest ||
+                    userAgent.includes('nekobox') ||
+                    userAgent.includes(
+                        ('CF-SUB').toLowerCase()
+                    )
                 )
-            )) {
+            ) {
 
                 if (
                     userAgent.includes('sing-box') ||
@@ -647,61 +579,49 @@ export default {
             let 订阅转换URL =
                 `${url.origin}/${await MD5MD5(fakeToken)}?token=${fakeToken}`;
 
-            let req_data =
-                MainData;
+            let req_data = MainData;
 
-            let 追加UA =
-                'v2rayn';
+            let 追加UA = 'v2rayn';
 
             if (
                 url.searchParams.has('b64') ||
                 url.searchParams.has('base64')
             ) {
-
                 订阅格式 = 'base64';
 
             } else if (
                 url.searchParams.has('clash')
             ) {
-
                 追加UA = 'clash';
 
             } else if (
                 url.searchParams.has('singbox')
             ) {
-
                 追加UA = 'singbox';
 
             } else if (
                 url.searchParams.has('surge')
             ) {
-
                 追加UA = 'surge';
 
             } else if (
                 url.searchParams.has('quanx')
             ) {
-
-                追加UA =
-                    'Quantumult%20X';
+                追加UA = 'Quantumult%20X';
 
             } else if (
                 url.searchParams.has('loon')
             ) {
-
                 追加UA = 'Loon';
             }
 
             const 订阅链接数组 =
                 [
                     ...new Set(urls)
-                ].filter(
-                    item => item?.trim?.()
-                );
+                ]
+                .filter(item => item?.trim?.());
 
-            if (
-                订阅链接数组.length > 0
-            ) {
+            if (订阅链接数组.length > 0) {
 
                 const 请求订阅响应内容 =
                     await getSUB(
@@ -712,8 +632,7 @@ export default {
                     );
 
                 req_data +=
-                    请求订阅响应内容[0]
-                        .join('\n');
+                    请求订阅响应内容[0].join('\n');
 
                 订阅转换URL +=
                     "|" +
@@ -722,8 +641,7 @@ export default {
                 if (
                     订阅格式 == 'base64' &&
                     !isSubConverterRequest &&
-                    请求订阅响应内容[1]
-                        .includes('://')
+                    请求订阅响应内容[1].includes('://')
                 ) {
 
                     try {
@@ -743,7 +661,7 @@ export default {
                                 {
                                     headers: {
                                         'User-Agent':
-                                            'v2rayn/CF-SUB'
+                                            'v2rayN/CF-SUB'
                                     }
                                 }
                             );
@@ -754,9 +672,7 @@ export default {
 
                         req_data +=
                             '\n' +
-                            atob(
-                                await res.text()
-                            );
+                            atob(await res.text());
 
                     } catch (error) {
 
@@ -777,7 +693,7 @@ export default {
                                     {
                                         headers: {
                                             'User-Agent':
-                                                'v2rayn/CF-SUB'
+                                                'v2rayN/CF-SUB'
                                         }
                                     }
                                 );
@@ -785,9 +701,7 @@ export default {
                             if (res2.ok) {
                                 req_data +=
                                     '\n' +
-                                    atob(
-                                        await res2.text()
-                                    );
+                                    atob(await res2.text());
                             }
 
                         } catch (e) {}
@@ -796,13 +710,10 @@ export default {
             }
 
             if (env.WARP) {
-
                 订阅转换URL +=
                     "|" +
                     (
-                        await ADD(
-                            env.WARP
-                        )
+                        await ADD(env.WARP)
                     ).join("|");
             }
 
@@ -814,8 +725,12 @@ export default {
                     utf8Encoder.encode(req_data)
                 );
 
+            // =====================================================
             // 去广告过滤
+            // =====================================================
+
             let adKeywords = [];
+
             let filteredLines =
                 text.split('\n');
 
@@ -824,32 +739,22 @@ export default {
                 adKeywords =
                     config_noAds
                         .split(/[, \r\n]+/)
-                        .map(k =>
-                            k.trim().toLowerCase()
-                        )
-                        .filter(k =>
-                            k.length > 0
-                        );
+                        .map(k => k.trim().toLowerCase())
+                        .filter(k => k.length > 0);
 
-                if (
-                    adKeywords.length > 0
-                ) {
+                if (adKeywords.length > 0) {
 
                     filteredLines =
-                        filteredLines.filter(
-                            line => {
+                        filteredLines.filter(line => {
 
-                                const lowerLine =
-                                    line.toLowerCase();
+                            const lowerLine =
+                                line.toLowerCase();
 
-                                return !adKeywords.some(
-                                    keyword =>
-                                        lowerLine.includes(
-                                            keyword
-                                        )
-                                );
-                            }
-                        );
+                            return !adKeywords.some(
+                                keyword =>
+                                    lowerLine.includes(keyword)
+                            );
+                        });
                 }
             }
 
@@ -858,6 +763,10 @@ export default {
 
             const result =
                 [...uniqueLines].join('\n');
+
+            // =====================================================
+            // Base64
+            // =====================================================
 
             let base64Data;
 
@@ -871,8 +780,7 @@ export default {
                 function encodeBase64(data) {
 
                     const binary =
-                        new TextEncoder()
-                            .encode(data);
+                        new TextEncoder().encode(data);
 
                     let base64 = '';
 
@@ -895,9 +803,7 @@ export default {
                             binary[i + 2] || 0;
 
                         base64 +=
-                            chars[
-                                byte1 >> 2
-                            ];
+                            chars[byte1 >> 2];
 
                         base64 +=
                             chars[
@@ -912,9 +818,7 @@ export default {
                             ];
 
                         base64 +=
-                            chars[
-                                byte3 & 63
-                            ];
+                            chars[byte3 & 63];
                     }
 
                     const padding =
@@ -927,8 +831,7 @@ export default {
                     return (
                         base64.slice(
                             0,
-                            base64.length -
-                                padding
+                            base64.length - padding
                         ) +
                         '=='.slice(
                             0,
@@ -951,7 +854,7 @@ export default {
                 "Profile-web-page-url":
                     request.url.includes('?')
                         ? request.url.split('?')[0]
-                        : request.url,
+                        : request.url
             };
 
             if (
@@ -962,8 +865,7 @@ export default {
                 return new Response(
                     base64Data,
                     {
-                        headers:
-                            responseHeaders
+                        headers: responseHeaders
                     }
                 );
 
@@ -1006,11 +908,8 @@ export default {
                     }
 
                     if (
-                        !userAgent.includes(
-                            'mozilla'
-                        )
+                        !userAgent.includes('mozilla')
                     ) {
-
                         responseHeaders[
                             "Content-Disposition"
                         ] =
@@ -1060,17 +959,12 @@ export default {
                             订阅格式 == 'clash'
                         ) {
                             contentFb =
-                                clashFix(
-                                    contentFb
-                                );
+                                clashFix(contentFb);
                         }
 
                         if (
-                            !userAgent.includes(
-                                'mozilla'
-                            )
+                            !userAgent.includes('mozilla')
                         ) {
-
                             responseHeaders[
                                 "Content-Disposition"
                             ] =
@@ -1101,6 +995,10 @@ export default {
     }
 };
 
+// ============================================================
+// SUBAPI / SUBCONFIG 转换 URL
+// ============================================================
+
 function buildSubUrl(
     api,
     config,
@@ -1110,15 +1008,21 @@ function buildSubUrl(
 ) {
 
     let base =
-        `${protocol}://${api}/sub?target=${target}&url=${encodeURIComponent(urlToConvert)}&insert=false&config=${encodeURIComponent(config)}&emoji=true&list=false&tfo=false&scv=true&fdn=false&sort=false`;
+        `${protocol}://${api}/sub?target=${target}` +
+        `&url=${encodeURIComponent(urlToConvert)}` +
+        `&insert=false` +
+        `&config=${encodeURIComponent(config)}` +
+        `&emoji=true` +
+        `&list=false` +
+        `&tfo=false` +
+        `&scv=true` +
+        `&fdn=false` +
+        `&sort=false`;
 
     if (target === 'surge') {
-
-        base +=
-            '&ver=4&new_name=true';
+        base += '&ver=4&new_name=true';
 
     } else if (target === 'quanx') {
-
         base += '&udp=true';
 
     } else if (
@@ -1126,38 +1030,30 @@ function buildSubUrl(
         target === 'singbox' ||
         target === 'mixed'
     ) {
-
         base += '&new_name=true';
     }
 
     return base;
 }
 
+// ============================================================
+// 地址解析
+// ============================================================
+
 async function ADD(envadd) {
 
     var addtext =
         envadd
-            .replace(
-                /[ "'|\r\n]+/g,
-                '\n'
-            )
-            .replace(
-                /\n+/g,
-                '\n'
-            );
+            .replace(/[ "'|\r\n]+/g, '\n')
+            .replace(/\n+/g, '\n');
 
-    if (
-        addtext.charAt(0) ==
-        '\n'
-    ) {
+    if (addtext.charAt(0) == '\n') {
         addtext =
             addtext.slice(1);
     }
 
     if (
-        addtext.charAt(
-            addtext.length - 1
-        ) == '\n'
+        addtext.charAt(addtext.length - 1) == '\n'
     ) {
         addtext =
             addtext.slice(
@@ -1172,7 +1068,10 @@ async function ADD(envadd) {
     return add;
 }
 
-// ================== 原生页面兜底 ==================
+// ============================================================
+// 原生 Nginx 页面
+// ============================================================
+
 async function nginx(titleName) {
 
     return `<!DOCTYPE html>
@@ -1197,14 +1096,666 @@ Commercial support is available at <a href="http://nginx.com/">nginx.com</a>.</p
 </html>`;
 }
 
+// ============================================================
+// 伪装页模式
+// ============================================================
+
+function normalizeDisguiseMode(mode) {
+
+    const value =
+        String(mode || '')
+            .trim()
+            .toLowerCase();
+
+    if (
+        value === 'url' ||
+        value === 'url302' ||
+        value === 'html' ||
+        value === 'off'
+    ) {
+        return value;
+    }
+
+    return 'off';
+}
+
+// ============================================================
+// HTML 标题处理
+// ============================================================
+
+function applyHtmlTitle(html, titleName) {
+
+    const safeTitle =
+        `<title>${escapeHTML(titleName)}</title>`;
+
+    if (
+        /<title\b[^>]*>[\s\S]*?<\/title>/i.test(html)
+    ) {
+
+        return html.replace(
+            /<title\b[^>]*>[\s\S]*?<\/title>/i,
+            safeTitle
+        );
+
+    }
+
+    if (
+        /<head\b[^>]*>/i.test(html)
+    ) {
+
+        return html.replace(
+            /<head\b[^>]*>/i,
+            match =>
+                match +
+                safeTitle
+        );
+
+    }
+
+    return safeTitle + html;
+}
+
+// ============================================================
+// HTML 基础可用性检测
+// ============================================================
+
+function validateCustomHTML(html) {
+
+    if (!String(html || '').trim()) {
+        return false;
+    }
+
+    const text =
+        String(html).trim();
+
+    // 必须至少具备 HTML 结构特征
+    if (
+        !/<html\b/i.test(text) &&
+        !/<body\b/i.test(text) &&
+        !/<head\b/i.test(text)
+    ) {
+        return false;
+    }
+
+    // 检测明显未闭合的关键结构
+    const requiredPairs = [
+        ['<html', '</html>'],
+        ['<head', '</head>'],
+        ['<body', '</body>']
+    ];
+
+    for (const [openTag, closeTag] of requiredPairs) {
+
+        if (
+            text.match(
+                new RegExp(openTag, 'gi')
+            ) &&
+            !text.match(
+                new RegExp(closeTag, 'gi')
+            )
+        ) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// ============================================================
+// URL / URL302 / HTML / Nginx 伪装页解析
+// ============================================================
+
+async function resolveDisguisePage(
+    request,
+    url,
+    options
+) {
+
+    const mode =
+        normalizeDisguiseMode(options.mode);
+
+    const title =
+        options.title || 'CF-SUB';
+
+    // ========================================================
+    // 关闭：始终原生 Nginx
+    // ========================================================
+
+    if (mode === 'off') {
+
+        return {
+            mode: 'off',
+            available: true,
+            label: '关闭（原生 Nginx）',
+            response: new Response(
+                await nginx(title),
+                {
+                    status: 200,
+                    headers: {
+                        'Content-Type':
+                            'text/html; charset=UTF-8'
+                    }
+                }
+            )
+        };
+    }
+
+    // ========================================================
+    // URL：反向代理
+    // ========================================================
+
+    if (mode === 'url') {
+
+        const target =
+            String(options.url || '').trim();
+
+        if (!target) {
+
+            return {
+                mode: 'url',
+                available: false,
+                label: 'URL（反向代理）不可用，实际使用原生 Nginx',
+                response: new Response(
+                    await nginx(title),
+                    {
+                        status: 200,
+                        headers: {
+                            'Content-Type':
+                                'text/html; charset=UTF-8'
+                        }
+                    }
+                )
+            };
+        }
+
+        try {
+
+            const response =
+                await proxyURL(
+                    target,
+                    url
+                );
+
+            const contentType =
+                response.headers.get(
+                    'content-type'
+                ) || '';
+
+            // 如果目标返回 HTML，自动让标题跟随 SUBNAME
+            if (
+                contentType.includes('text/html')
+            ) {
+
+                let html =
+                    await response.text();
+
+                html =
+                    applyHtmlTitle(
+                        html,
+                        title
+                    );
+
+                const headers =
+                    new Headers(
+                        response.headers
+                    );
+
+                headers.set(
+                    'Content-Type',
+                    'text/html; charset=UTF-8'
+                );
+
+                return {
+                    mode: 'url',
+                    available: true,
+                    label: 'URL（反向代理）可用',
+                    response: new Response(
+                        html,
+                        {
+                            status: response.status,
+                            statusText:
+                                response.statusText,
+                            headers
+                        }
+                    )
+                };
+            }
+
+            return {
+                mode: 'url',
+                available: true,
+                label: 'URL（反向代理）可用',
+                response
+            };
+
+        } catch (e) {
+
+            console.error(
+                'URL 伪装页请求失败:',
+                e
+            );
+
+            return {
+                mode: 'url',
+                available: false,
+                label: 'URL（反向代理）不可用，实际使用原生 Nginx',
+                response: new Response(
+                    await nginx(title),
+                    {
+                        status: 200,
+                        headers: {
+                            'Content-Type':
+                                'text/html; charset=UTF-8'
+                        }
+                    }
+                )
+            };
+        }
+    }
+
+    // ========================================================
+    // URL302：302 定向
+    // ========================================================
+
+    if (mode === 'url302') {
+
+        const target =
+            String(options.url302 || '').trim();
+
+        if (!target) {
+
+            return {
+                mode: 'url302',
+                available: false,
+                label: 'URL302（定向）不可用，实际使用原生 Nginx',
+                response: new Response(
+                    await nginx(title),
+                    {
+                        status: 200,
+                        headers: {
+                            'Content-Type':
+                                'text/html; charset=UTF-8'
+                        }
+                    }
+                )
+            };
+        }
+
+        try {
+
+            new URL(target);
+
+            return {
+                mode: 'url302',
+                available: true,
+                label: 'URL302（定向）可用',
+                response:
+                    Response.redirect(
+                        target,
+                        302
+                    )
+            };
+
+        } catch (e) {
+
+            return {
+                mode: 'url302',
+                available: false,
+                label: 'URL302（定向）不可用，实际使用原生 Nginx',
+                response: new Response(
+                    await nginx(title),
+                    {
+                        status: 200,
+                        headers: {
+                            'Content-Type':
+                                'text/html; charset=UTF-8'
+                        }
+                    }
+                )
+            };
+        }
+    }
+
+    // ========================================================
+    // HTML：自定义代码
+    // ========================================================
+
+    if (mode === 'html') {
+
+        const html =
+            String(options.html || '');
+
+        if (
+            !validateCustomHTML(html)
+        ) {
+
+            return {
+                mode: 'html',
+                available: false,
+                label: 'HTML（自定义代码）不可用，实际使用原生 Nginx',
+                response: new Response(
+                    await nginx(title),
+                    {
+                        status: 200,
+                        headers: {
+                            'Content-Type':
+                                'text/html; charset=UTF-8'
+                        }
+                    }
+                )
+            };
+        }
+
+        try {
+
+            const finalHTML =
+                applyHtmlTitle(
+                    html,
+                    title
+                );
+
+            return {
+                mode: 'html',
+                available: true,
+                label: 'HTML（自定义代码）可用',
+                response: new Response(
+                    finalHTML,
+                    {
+                        status: 200,
+                        headers: {
+                            'Content-Type':
+                                'text/html; charset=UTF-8'
+                        }
+                    }
+                )
+            };
+
+        } catch (e) {
+
+            console.error(
+                'HTML 伪装页处理失败:',
+                e
+            );
+
+            return {
+                mode: 'html',
+                available: false,
+                label: 'HTML（自定义代码）不可用，实际使用原生 Nginx',
+                response: new Response(
+                    await nginx(title),
+                    {
+                        status: 200,
+                        headers: {
+                            'Content-Type':
+                                'text/html; charset=UTF-8'
+                        }
+                    }
+                )
+            };
+        }
+    }
+
+    // ========================================================
+    // 未知模式最终兜底
+    // ========================================================
+
+    return {
+        mode: 'off',
+        available: true,
+        label: '关闭（原生 Nginx）',
+        response: new Response(
+            await nginx(title),
+            {
+                status: 200,
+                headers: {
+                    'Content-Type':
+                        'text/html; charset=UTF-8'
+                }
+            }
+        )
+    };
+}
+
+// ============================================================
+// 获取伪装页设置当前真实状态
+// ============================================================
+
+async function getDisguiseStatus(options) {
+
+    const mode =
+        normalizeDisguiseMode(options.mode);
+
+    const url =
+        String(options.url || '').trim();
+
+    const url302 =
+        String(options.url302 || '').trim();
+
+    const html =
+        String(options.html || '');
+
+    if (mode === 'off') {
+
+        return {
+            mode: 'off',
+            available: true,
+            label: '关闭（原生 Nginx）'
+        };
+    }
+
+    if (mode === 'url') {
+
+        if (!url) {
+
+            return {
+                mode: 'url',
+                available: false,
+                label:
+                    'URL（反向代理）不可用，实际使用原生 Nginx'
+            };
+        }
+
+        try {
+
+            const parsed =
+                new URL(
+                    (
+                        await ADD(url)
+                    )[0]
+                );
+
+            if (
+                !['http:', 'https:']
+                    .includes(parsed.protocol)
+            ) {
+                throw new Error();
+            }
+
+            const result =
+                await probeDisguiseURL(
+                    url
+                );
+
+            if (result.ok) {
+
+                return {
+                    mode: 'url',
+                    available: true,
+                    label:
+                        'URL（反向代理）可用'
+                };
+            }
+
+        } catch (e) {}
+
+        return {
+            mode: 'url',
+            available: false,
+            label:
+                'URL（反向代理）不可用，实际使用原生 Nginx'
+        };
+    }
+
+    if (mode === 'url302') {
+
+        if (!url302) {
+
+            return {
+                mode: 'url302',
+                available: false,
+                label:
+                    'URL302（定向）不可用，实际使用原生 Nginx'
+            };
+        }
+
+        try {
+
+            const parsed =
+                new URL(url302);
+
+            if (
+                !['http:', 'https:']
+                    .includes(parsed.protocol)
+            ) {
+                throw new Error();
+            }
+
+            return {
+                mode: 'url302',
+                available: true,
+                label:
+                    'URL302（定向）可用'
+            };
+
+        } catch (e) {
+
+            return {
+                mode: 'url302',
+                available: false,
+                label:
+                    'URL302（定向）不可用，实际使用原生 Nginx'
+            };
+        }
+    }
+
+    if (mode === 'html') {
+
+        if (
+            validateCustomHTML(html)
+        ) {
+
+            return {
+                mode: 'html',
+                available: true,
+                label:
+                    'HTML（自定义代码）可用'
+            };
+        }
+
+        return {
+            mode: 'html',
+            available: false,
+            label:
+                'HTML（自定义代码）不可用，实际使用原生 Nginx'
+        };
+    }
+
+    return {
+        mode: 'off',
+        available: true,
+        label: '关闭（原生 Nginx）'
+    };
+}
+
+// ============================================================
+// 伪装 URL 可用性探测
+// ============================================================
+
+async function probeDisguiseURL(target) {
+
+    try {
+
+        const URLs =
+            await ADD(target);
+
+        if (!URLs.length) {
+            return { ok: false };
+        }
+
+        const fullURL =
+            URLs[
+                Math.floor(
+                    Math.random() *
+                    URLs.length
+                )
+            ];
+
+        const parsed =
+            new URL(fullURL);
+
+        if (
+            !['http:', 'https:']
+                .includes(parsed.protocol)
+        ) {
+            return { ok: false };
+        }
+
+        const controller =
+            new AbortController();
+
+        const timeout =
+            setTimeout(
+                () => controller.abort(),
+                1800
+            );
+
+        try {
+
+            const response =
+                await fetch(
+                    parsed.toString(),
+                    {
+                        method: 'HEAD',
+                        redirect: 'follow',
+                        signal:
+                            controller.signal
+                    }
+                );
+
+            return {
+                ok: response.ok ||
+                    (
+                        response.status >= 300 &&
+                        response.status < 500
+                    )
+            };
+
+        } finally {
+
+            clearTimeout(timeout);
+        }
+
+    } catch (e) {
+
+        return {
+            ok: false
+        };
+    }
+}
+
+// ============================================================
+// Base64
+// ============================================================
+
 function base64Decode(str) {
 
     const bytes =
         new Uint8Array(
             atob(str)
                 .split('')
-                .map(c =>
-                    c.charCodeAt(0)
+                .map(
+                    c =>
+                        c.charCodeAt(0)
                 )
         );
 
@@ -1213,6 +1764,10 @@ function base64Decode(str) {
 
     return decoder.decode(bytes);
 }
+
+// ============================================================
+// MD5
+// ============================================================
 
 async function MD5MD5(text) {
 
@@ -1226,15 +1781,15 @@ async function MD5MD5(text) {
         );
 
     const firstHex =
-        Array
-            .from(
-                new Uint8Array(firstPass)
-            )
-            .map(b =>
+        Array.from(
+            new Uint8Array(firstPass)
+        )
+        .map(
+            b =>
                 b.toString(16)
                     .padStart(2, '0')
-            )
-            .join('');
+        )
+        .join('');
 
     const secondPass =
         await crypto.subtle.digest(
@@ -1244,25 +1799,27 @@ async function MD5MD5(text) {
             )
         );
 
-    return Array
-        .from(
-            new Uint8Array(secondPass)
-        )
-        .map(b =>
+    return Array.from(
+        new Uint8Array(secondPass)
+    )
+    .map(
+        b =>
             b.toString(16)
                 .padStart(2, '0')
-        )
-        .join('')
-        .toLowerCase();
+    )
+    .join('')
+    .toLowerCase();
 }
+
+// ============================================================
+// Clash 修复
+// ============================================================
 
 function clashFix(content) {
 
     if (
         content.includes('wireguard') &&
-        !content.includes(
-            'remote-dns-resolve'
-        )
+        !content.includes('remote-dns-resolve')
     ) {
 
         let lines =
@@ -1272,9 +1829,7 @@ function clashFix(content) {
 
         let result = "";
 
-        for (
-            let line of lines
-        ) {
+        for (let line of lines) {
 
             if (
                 line.includes(
@@ -1295,7 +1850,8 @@ function clashFix(content) {
             } else {
 
                 result +=
-                    line + '\n';
+                    line +
+                    '\n';
             }
         }
 
@@ -1305,6 +1861,10 @@ function clashFix(content) {
     return content;
 }
 
+// ============================================================
+// 反向代理
+// ============================================================
+
 async function proxyURL(
     proxyURL,
     url
@@ -1312,6 +1872,12 @@ async function proxyURL(
 
     const URLs =
         await ADD(proxyURL);
+
+    if (!URLs.length) {
+        throw new Error(
+            'URL 为空'
+        );
+    }
 
     const fullURL =
         URLs[
@@ -1344,7 +1910,10 @@ async function proxyURL(
         url.pathname;
 
     let newURL =
-        `${parsedURL.protocol.slice(0, -1) || 'https'}://${parsedURL.hostname}${URLPathname}${parsedURL.search}`;
+        `${parsedURL.protocol.slice(0, -1) || 'https'}://` +
+        `${parsedURL.hostname}` +
+        `${URLPathname}` +
+        `${parsedURL.search}`;
 
     let response =
         await fetch(newURL);
@@ -1372,6 +1941,10 @@ async function proxyURL(
     return newResponse;
 }
 
+// ============================================================
+// 获取订阅
+// ============================================================
+
 async function getSUB(
     api,
     request,
@@ -1384,7 +1957,9 @@ async function getSUB(
         api.length === 0
     ) {
         return [];
-    } else {
+    }
+
+    else {
         api = [
             ...new Set(api)
         ];
@@ -1416,23 +1991,19 @@ async function getSUB(
                             apiUrl,
                             追加UA,
                             userAgentHeader
-                        ).then(
+                        )
+                        .then(
                             response =>
                                 response.ok
                                     ? response.text()
-                                    : Promise.reject(
-                                        response
-                                    )
+                                    : Promise.reject(response)
                         )
                 )
             );
 
         const modifiedResponses =
             responses.map(
-                (
-                    response,
-                    index
-                ) => {
+                (response, index) => {
 
                     if (
                         response.status ===
@@ -1441,9 +2012,11 @@ async function getSUB(
 
                         return {
                             status:
-                                response.reason &&
-                                response.reason.name ===
+                                (
+                                    response.reason &&
+                                    response.reason.name ===
                                     'AbortError'
+                                )
                                     ? '超时'
                                     : '请求失败',
 
@@ -1501,9 +2074,7 @@ async function getSUB(
                         response.apiUrl;
 
                 } else if (
-                    content.includes(
-                        '://'
-                    )
+                    content.includes('://')
                 ) {
 
                     newapi +=
@@ -1548,6 +2119,10 @@ async function getSUB(
         订阅转换URLs
     ];
 }
+
+// ============================================================
+// 请求 URL
+// ============================================================
 
 async function getUrl(
     request,
@@ -1600,15 +2175,20 @@ async function getUrl(
     );
 }
 
+// ============================================================
+// Base64 有效性
+// ============================================================
+
 function isValidBase64(str) {
 
     return /^[A-Za-z0-9+/=]+$/.test(
-        str.replace(
-            /\s/g,
-            ''
-        )
+        str.replace(/\s/g, '')
     );
 }
+
+// ============================================================
+// KV 地址迁移
+// ============================================================
 
 async function 迁移地址列表(
     env,
@@ -1621,7 +2201,9 @@ async function 迁移地址列表(
         );
 
     const 新数据 =
-        await env.KV.get(txt);
+        await env.KV.get(
+            txt
+        );
 
     if (
         旧数据 &&
@@ -1643,6 +2225,10 @@ async function 迁移地址列表(
     return false;
 }
 
+// ============================================================
+// Cookie
+// ============================================================
+
 function getCookie(
     request,
     name
@@ -1662,7 +2248,8 @@ function getCookie(
             );
 
     for (
-        const item of cookies
+        const item
+        of cookies
     ) {
 
         const index =
@@ -1692,21 +2279,40 @@ function getCookie(
     return '';
 }
 
+// ============================================================
+// HTML 转义
+// ============================================================
+
 function escapeHTML(
     text = ''
 ) {
 
-    return String(text).replace(
-        /[&<>"']/g,
-        char => ({
-            '&': '&amp;',
-            '<': '&lt;',
-            '>': '&gt;',
-            '"': '&quot;',
-            "'": '&#39;'
-        }[char])
-    );
+    return String(text)
+        .replace(
+            /[&<>"']/g,
+            char =>
+                ({
+                    '&':
+                        '&amp;',
+
+                    '<':
+                        '&lt;',
+
+                    '>':
+                        '&gt;',
+
+                    '"':
+                        '&quot;',
+
+                    "'":
+                        '&#39;'
+                }[char])
+        );
 }
+
+// ============================================================
+// 管理员 Session
+// ============================================================
 
 async function getAdminSessionValue(
     user,
@@ -1714,7 +2320,10 @@ async function getAdminSessionValue(
     token
 ) {
 
-    if (!user || !pass) {
+    if (
+        !user ||
+        !pass
+    ) {
         return '';
     }
 
@@ -1762,12 +2371,24 @@ function buildAdminCookie(
 ) {
 
     const secure =
-        url.protocol === 'https:'
+        url.protocol ===
+        'https:'
             ? '; Secure'
             : '';
 
-    return `CF_SUB_ADMIN=${encodeURIComponent(value)}; Max-Age=604800; Path=/; HttpOnly; SameSite=Lax${secure}`;
+    return (
+        `CF_SUB_ADMIN=${encodeURIComponent(value)}; ` +
+        `Max-Age=604800; ` +
+        `Path=/; ` +
+        `HttpOnly; ` +
+        `SameSite=Lax` +
+        secure
+    );
 }
+
+// ============================================================
+// 管理员登录
+// ============================================================
 
 async function handleAdminLogin(
     request,
@@ -1808,7 +2429,6 @@ async function handleAdminLogin(
             ),
             {
                 status: 400,
-
                 headers: {
                     'Content-Type':
                         'text/html;charset=utf-8',
@@ -1873,7 +2493,10 @@ async function handleAdminLogin(
     );
 }
 
-// ==================== UI 样式与渲染模块 ====================
+// ============================================================
+// UI 样式
+// ============================================================
+
 function getToolStyles() {
 
     return `
@@ -1885,11 +2508,18 @@ function getToolStyles() {
             margin: 0;
             background: #f5f7fa;
             color: #202124;
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-family:
+                -apple-system,
+                BlinkMacSystemFont,
+                'Segoe UI',
+                Roboto,
+                sans-serif;
             font-size: 14px;
             line-height: 1.5;
             min-height: 100vh;
-            transition: background 0.3s, color 0.3s;
+            transition:
+                background 0.3s,
+                color 0.3s;
         }
 
         .page {
@@ -1919,13 +2549,24 @@ function getToolStyles() {
         }
 
         .panel {
-            background: rgba(255, 255, 255, 0.85);
-            border: 1px solid rgba(229, 229, 223, 0.8);
+            background:
+                rgba(255, 255, 255, 0.85);
+            border:
+                1px solid rgba(
+                    229,
+                    229,
+                    223,
+                    0.8
+                );
             border-radius: 20px;
             padding: 16px;
             margin-top: 12px;
-            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.05);
-            transition: background 0.3s, border-color 0.3s;
+            box-shadow:
+                0 4px 20px
+                rgba(0, 0, 0, 0.05);
+            transition:
+                background 0.3s,
+                border-color 0.3s;
         }
 
         .section-title {
@@ -1946,11 +2587,25 @@ function getToolStyles() {
         }
 
         .link-item {
-            border: 1px solid rgba(229, 229, 223, 0.6);
+            border:
+                1px solid rgba(
+                    229,
+                    229,
+                    223,
+                    0.6
+                );
             border-radius: 12px;
             padding: 12px;
-            background: rgba(255, 255, 255, 0.5);
-            transition: background 0.3s, border-color 0.3s;
+            background:
+                rgba(
+                    255,
+                    255,
+                    255,
+                    0.5
+                );
+            transition:
+                background 0.3s,
+                border-color 0.3s;
         }
 
         .link-label {
@@ -1967,17 +2622,35 @@ function getToolStyles() {
             overflow-wrap: break-word;
             word-break: break-all;
             white-space: normal;
-            padding: 10px;
-            border: 1px solid rgba(229, 229, 223, 0.8);
+            padding: 10px 10px;
+            border:
+                1px solid rgba(
+                    229,
+                    229,
+                    223,
+                    0.8
+                );
             border-radius: 8px;
-            background: rgba(250, 250, 250, 0.7);
+            background:
+                rgba(
+                    250,
+                    250,
+                    250,
+                    0.7
+                );
             color: #1f4b99;
             text-decoration: none;
             transition: all 0.3s ease;
         }
 
         .link-url:hover {
-            background: rgba(31, 75, 153, 0.05);
+            background:
+                rgba(
+                    31,
+                    75,
+                    153,
+                    0.05
+                );
             border-color: #1f4b99;
         }
 
@@ -1991,39 +2664,107 @@ function getToolStyles() {
         button {
             min-height: 36px;
             padding: 8px 16px;
-            border: 1px solid #343a40;
+            border:
+                1px solid rgba(
+                    34,
+                    34,
+                    34,
+                    0.2
+                );
             border-radius: 10px;
-            background: #2f3338;
+            background:
+                rgba(
+                    34,
+                    34,
+                    34,
+                    0.8
+                );
             color: #fff;
             font-size: 14px;
             cursor: pointer;
-            font-weight: 600;
+            font-weight: 500;
             transition: all 0.3s ease;
         }
 
         button:hover {
-            background: #1f2327;
-            box-shadow: 0 4px 12px rgba(34, 34, 34, 0.15);
+            background:
+                rgba(
+                    34,
+                    34,
+                    34,
+                    0.9
+                );
+            box-shadow:
+                0 4px 12px
+                rgba(
+                    34,
+                    34,
+                    34,
+                    0.15
+                );
         }
 
         button.secondary {
-            background: #fff;
+            background:
+                rgba(
+                    255,
+                    255,
+                    255,
+                    0.8
+                );
             color: #222;
-            border-color: #c8c8c0;
+            border-color:
+                rgba(
+                    200,
+                    200,
+                    192,
+                    0.5
+                );
         }
 
         button.secondary:hover {
-            background: #f1f3f5;
+            background:
+                rgba(
+                    255,
+                    255,
+                    255,
+                    0.95
+                );
         }
 
         button.danger {
-            background: #dc3545;
-            border-color: #dc3545;
+            background:
+                rgba(
+                    220,
+                    53,
+                    69,
+                    0.8
+                );
+            border-color:
+                rgba(
+                    220,
+                    53,
+                    69,
+                    0.2
+                );
         }
 
         button.danger:hover {
-            background: #c82333;
-            box-shadow: 0 4px 12px rgba(220, 53, 69, 0.2);
+            background:
+                rgba(
+                    220,
+                    53,
+                    69,
+                    0.95
+                );
+            box-shadow:
+                0 4px 12px
+                rgba(
+                    220,
+                    53,
+                    69,
+                    0.2
+                );
         }
 
         button:disabled {
@@ -2046,9 +2787,21 @@ function getToolStyles() {
         input,
         textarea {
             width: 100%;
-            border: 1px solid rgba(207, 207, 200, 0.6);
+            border:
+                1px solid rgba(
+                    207,
+                    207,
+                    200,
+                    0.6
+                );
             border-radius: 10px;
-            background: rgba(255, 255, 255, 0.8);
+            background:
+                rgba(
+                    255,
+                    255,
+                    255,
+                    0.8
+                );
             color: #202124;
             font-size: 14px;
             padding: 10px;
@@ -2063,7 +2816,14 @@ function getToolStyles() {
             outline: none;
             border-color: #3b82f6;
             background: #fff;
-            box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.1);
+            box-shadow:
+                0 0 0 3px
+                rgba(
+                    59,
+                    130,
+                    246,
+                    0.1
+                );
         }
 
         input {
@@ -2093,14 +2853,27 @@ function getToolStyles() {
             position: fixed;
             left: 50%;
             top: 50%;
-            transform: translate(-50%, -50%);
+            transform:
+                translate(
+                    -50%,
+                    -50%
+                );
             display: none;
             min-width: 190px;
-            max-width: calc(100vw - 40px);
+            max-width:
+                calc(
+                    100vw - 40px
+                );
             padding: 12px 18px;
             text-align: center;
             color: #fff;
-            background: rgba(0, 0, 0, 0.82);
+            background:
+                rgba(
+                    0,
+                    0,
+                    0,
+                    0.82
+                );
             border-radius: 12px;
             z-index: 9999;
         }
@@ -2116,35 +2889,87 @@ function getToolStyles() {
             font-weight: 600;
             width: 100%;
             word-break: break-all;
-            transition: background 0.3s, color 0.3s, border-color 0.3s;
+            transition:
+                background 0.3s,
+                color 0.3s,
+                border-color 0.3s;
         }
 
         .status-ok {
-            background: rgba(76, 175, 80, 0.1);
+            background:
+                rgba(
+                    76,
+                    175,
+                    80,
+                    0.1
+                );
             color: #2e7d32;
-            border: 1px solid rgba(76, 175, 80, 0.2);
+            border:
+                1px solid rgba(
+                    76,
+                    175,
+                    80,
+                    0.2
+                );
         }
 
         .status-warn {
-            background: rgba(255, 152, 0, 0.1);
+            background:
+                rgba(
+                    255,
+                    152,
+                    0,
+                    0.1
+                );
             color: #f57c00;
-            border: 1px solid rgba(255, 152, 0, 0.2);
+            border:
+                1px solid rgba(
+                    255,
+                    152,
+                    0,
+                    0.2
+                );
         }
 
         .status-error {
-            background: rgba(244, 67, 54, 0.1);
+            background:
+                rgba(
+                    244,
+                    67,
+                    54,
+                    0.1
+                );
             color: #c62828;
-            border: 1px solid rgba(244, 67, 54, 0.2);
+            border:
+                1px solid rgba(
+                    244,
+                    67,
+                    54,
+                    0.2
+                );
         }
 
         #current-qrcode {
             display: none;
             margin-top: 12px;
             padding: 12px;
-            border: 1px solid rgba(229, 229, 223, 0.6);
+            border:
+                1px solid rgba(
+                    229,
+                    229,
+                    223,
+                    0.6
+                );
             border-radius: 12px;
-            background: rgba(255, 255, 255, 0.7);
-            backdrop-filter: blur(10px);
+            background:
+                rgba(
+                    255,
+                    255,
+                    255,
+                    0.7
+                );
+            backdrop-filter:
+                blur(10px);
             width: fit-content;
             max-width: 100%;
         }
@@ -2159,9 +2984,17 @@ function getToolStyles() {
             left: 0;
             width: 100vw;
             height: 100vh;
-            background: rgba(0, 0, 0, 0.4);
-            backdrop-filter: blur(8px);
-            -webkit-backdrop-filter: blur(8px);
+            background:
+                rgba(
+                    0,
+                    0,
+                    0,
+                    0.4
+                );
+            backdrop-filter:
+                blur(8px);
+            -webkit-backdrop-filter:
+                blur(8px);
             display: none;
             justify-content: center;
             align-items: center;
@@ -2169,14 +3002,35 @@ function getToolStyles() {
         }
 
         .modal-content {
-            background: rgba(255, 255, 255, 0.95);
+            background:
+                rgba(
+                    255,
+                    255,
+                    255,
+                    0.95
+                );
             border-radius: 20px;
             padding: 24px;
             width: 90%;
             max-width: 420px;
-            box-shadow: 0 10px 40px rgba(0,0,0,0.2);
-            border: 1px solid rgba(255, 255, 255, 0.5);
-            transition: background 0.3s, border-color 0.3s;
+            box-shadow:
+                0 10px 40px
+                rgba(
+                    0,
+                    0,
+                    0,
+                    0.2
+                );
+            border:
+                1px solid rgba(
+                    255,
+                    255,
+                    255,
+                    0.5
+                );
+            transition:
+                background 0.3s,
+                border-color 0.3s;
         }
 
         @media (prefers-color-scheme: dark) {
@@ -2197,14 +3051,45 @@ function getToolStyles() {
             }
 
             .panel {
-                background: rgba(30, 30, 30, 0.75);
-                border-color: rgba(255, 255, 255, 0.1);
-                box-shadow: 0 4px 20px rgba(0,0,0,0.3);
+                background:
+                    rgba(
+                        30,
+                        30,
+                        30,
+                        0.75
+                    );
+                border-color:
+                    rgba(
+                        255,
+                        255,
+                        255,
+                        0.1
+                    );
+                box-shadow:
+                    0 4px 20px
+                    rgba(
+                        0,
+                        0,
+                        0,
+                        0.3
+                    );
             }
 
             .link-item {
-                background: rgba(40, 40, 40, 0.5);
-                border-color: rgba(255, 255, 255, 0.1);
+                background:
+                    rgba(
+                        40,
+                        40,
+                        40,
+                        0.5
+                    );
+                border-color:
+                    rgba(
+                        255,
+                        255,
+                        255,
+                        0.1
+                    );
             }
 
             .link-label,
@@ -2213,93 +3098,278 @@ function getToolStyles() {
             }
 
             .link-url {
-                background: rgba(0, 0, 0, 0.3);
+                background:
+                    rgba(
+                        0,
+                        0,
+                        0,
+                        0.3
+                    );
                 color: #64b5f6;
-                border-color: rgba(255,255,255,0.1);
+                border-color:
+                    rgba(
+                        255,
+                        255,
+                        255,
+                        0.1
+                    );
             }
 
             .link-url:hover {
-                background: rgba(100, 181, 246, 0.1);
-                border-color: #64b5f6;
+                background:
+                    rgba(
+                        100,
+                        181,
+                        246,
+                        0.1
+                    );
+                border-color:
+                    #64b5f6;
             }
 
             input,
             textarea {
-                background: rgba(20, 20, 20, 0.8);
+                background:
+                    rgba(
+                        20,
+                        20,
+                        20,
+                        0.8
+                    );
                 color: #fff;
-                border-color: rgba(255,255,255,0.2);
+                border-color:
+                    rgba(
+                        255,
+                        255,
+                        255,
+                        0.2
+                    );
             }
 
             input:focus,
             textarea:focus {
                 background: #000;
-                border-color: #3b82f6;
+                border-color:
+                    #3b82f6;
             }
 
             button {
-                background: #3f4650;
+                background:
+                    rgba(
+                        100,
+                        100,
+                        100,
+                        0.9
+                    );
+                border-color:
+                    rgba(
+                        255,
+                        255,
+                        255,
+                        0.3
+                    );
                 color: #fff;
-                border-color: #69717c;
-                box-shadow: 0 2px 8px rgba(0,0,0,0.28);
+                box-shadow:
+                    0 2px 6px
+                    rgba(
+                        0,
+                        0,
+                        0,
+                        0.2
+                    );
             }
 
             button:hover {
-                background: #525b67;
-                border-color: #858f9b;
-                box-shadow: 0 4px 14px rgba(0,0,0,0.4);
+                background:
+                    rgba(
+                        120,
+                        120,
+                        120,
+                        1
+                    );
+                border-color:
+                    rgba(
+                        255,
+                        255,
+                        255,
+                        0.5
+                    );
+                box-shadow:
+                    0 4px 12px
+                    rgba(
+                        255,
+                        255,
+                        255,
+                        0.1
+                    );
             }
 
             button.secondary {
-                background: #3a414a;
-                color: #fff;
-                border-color: #69717c;
+                background:
+                    rgba(
+                        60,
+                        60,
+                        60,
+                        0.8
+                    );
+                color: #e0e0e0;
+                border-color:
+                    rgba(
+                        255,
+                        255,
+                        255,
+                        0.2
+                    );
             }
 
             button.secondary:hover {
-                background: #4b5561;
-                border-color: #858f9b;
+                background:
+                    rgba(
+                        80,
+                        80,
+                        80,
+                        0.95
+                    );
+                color: #fff;
+                border-color:
+                    rgba(
+                        255,
+                        255,
+                        255,
+                        0.4
+                    );
             }
 
             button.danger {
-                background: #b8323f;
+                background:
+                    rgba(
+                        211,
+                        47,
+                        47,
+                        0.9
+                    );
+                border-color:
+                    rgba(
+                        255,
+                        100,
+                        100,
+                        0.3
+                    );
                 color: #fff;
-                border-color: #d24b58;
             }
 
             button.danger:hover {
-                background: #d13e4d;
-                border-color: #e16a75;
+                background:
+                    rgba(
+                        230,
+                        50,
+                        50,
+                        1
+                    );
+                border-color:
+                    rgba(
+                        255,
+                        100,
+                        100,
+                        0.6
+                    );
+                box-shadow:
+                    0 4px 12px
+                    rgba(
+                        211,
+                        47,
+                        47,
+                        0.3
+                    );
             }
 
             .status-ok {
-                background: rgba(129, 199, 132, 0.1);
+                background:
+                    rgba(
+                        129,
+                        199,
+                        132,
+                        0.15
+                    );
                 color: #81c784;
-                border-color: rgba(129, 199, 132, 0.2);
+                border-color:
+                    rgba(
+                        129,
+                        199,
+                        132,
+                        0.3
+                    );
             }
 
             .status-warn {
-                background: rgba(255, 183, 77, 0.1);
+                background:
+                    rgba(
+                        255,
+                        183,
+                        77,
+                        0.15
+                    );
                 color: #ffb74d;
-                border-color: rgba(255, 183, 77, 0.2);
+                border-color:
+                    rgba(
+                        255,
+                        183,
+                        77,
+                        0.3
+                    );
             }
 
             .status-error {
-                background: rgba(229, 115, 115, 0.1);
+                background:
+                    rgba(
+                        229,
+                        115,
+                        115,
+                        0.15
+                    );
                 color: #e57373;
-                border-color: rgba(229, 115, 115, 0.2);
+                border-color:
+                    rgba(
+                        229,
+                        115,
+                        115,
+                        0.3
+                    );
             }
 
             .modal-content {
-                background: rgba(30, 30, 30, 0.95);
-                border-color: rgba(255, 255, 255, 0.1);
+                background:
+                    rgba(
+                        30,
+                        30,
+                        30,
+                        0.95
+                    );
+                border-color:
+                    rgba(
+                        255,
+                        255,
+                        255,
+                        0.1
+                    );
             }
 
             #current-qrcode {
-                background: rgba(255, 255, 255, 0.9);
+                background:
+                    rgba(
+                        255,
+                        255,
+                        255,
+                        0.9
+                    );
             }
         }
     `;
 }
+
+// ============================================================
+// 订阅链接
+// ============================================================
 
 function getSubscriptionLinks(
     url,
@@ -2310,65 +3380,103 @@ function getSubscriptionLinks(
         `https://${url.hostname}/${token}`;
 
     return [
-        ['自适应订阅地址', base],
-        ['Base64订阅地址', `${base}?b64`],
-        ['Clash订阅地址', `${base}?clash`],
-        ['Sing-box订阅地址', `${base}?sb`],
-        ['Surge订阅地址', `${base}?surge`],
-        ['Loon订阅地址', `${base}?loon`],
+        [
+            '自适应订阅地址',
+            base
+        ],
+
+        [
+            'Base64订阅地址',
+            `${base}?b64`
+        ],
+
+        [
+            'Clash订阅地址',
+            `${base}?clash`
+        ],
+
+        [
+            'Sing-box订阅地址',
+            `${base}?sb`
+        ],
+
+        [
+            'Surge订阅地址',
+            `${base}?surge`
+        ],
+
+        [
+            'Loon订阅地址',
+            `${base}?loon`
+        ]
     ];
 }
+
+// ============================================================
+// 链接列表
+// ============================================================
 
 function renderLinkList(
     links
 ) {
 
-    return `<div class="link-list">
-        ${links.map(
-            ([label, value]) => `
-            <div class="link-item">
-                <div class="link-label">${escapeHTML(label)}</div>
+    let html =
+        '<div class="link-list">';
 
-                <a
-                    class="link-url"
-                    href="${escapeHTML(value)}"
-                    target="_blank"
-                >
-                    ${escapeHTML(value)}
-                </a>
+    for (
+        let [label, value]
+        of links
+    ) {
 
-                <div class="actions">
+        html +=
+            '<div class="link-item">';
 
-                    <button
-                        type="button"
-                        class="copy-btn"
-                        onclick="copySubscription(this)"
-                        data-url="${escapeHTML(value)}"
-                    >
-                        复制
-                    </button>
+        html +=
+            '<div class="link-label">' +
+            escapeHTML(label) +
+            '</div>';
 
-                    <button
-                        type="button"
-                        class="secondary hide-btn hidden"
-                        onclick="hideQrcode(this)"
-                    >
-                        隐藏二维码
-                    </button>
+        html +=
+            '<a class="link-url" href="' +
+            escapeHTML(value) +
+            '" target="_blank">' +
+            escapeHTML(value) +
+            '</a>';
 
-                </div>
+        html +=
+            '<div class="actions">';
 
-            </div>
-        `
-        ).join('')}
-    </div>`;
+        html +=
+            '<button type="button" class="copy-btn" onclick="copySubscription(this)" data-url="' +
+            escapeHTML(value) +
+            '">复制</button>';
+
+        html +=
+            '<button type="button" class="secondary hide-btn hidden" onclick="hideQrcode(this)">隐藏二维码</button>';
+
+        html +=
+            '</div></div>';
+    }
+
+    html +=
+        '</div>';
+
+    return html;
 }
+
+// ============================================================
+// 前端脚本
+// ============================================================
 
 function renderToolScripts(
     includeEditor = false
 ) {
 
-    return `<script>
+    let script =
+        '<sc' +
+        'ript>\n';
+
+    script += `
 
         let toastTimer;
 
@@ -2399,9 +3507,7 @@ function renderToolScripts(
                 );
         }
 
-        function copySubscription(
-            button
-        ) {
+        function copySubscription(button) {
 
             navigator.clipboard
                 .writeText(
@@ -2423,11 +3529,13 @@ function renderToolScripts(
                         );
 
                         const hideBtn =
-                            button.closest(
-                                '.actions'
-                            ).querySelector(
-                                '.hide-btn'
-                            );
+                            button
+                                .closest(
+                                    '.actions'
+                                )
+                                .querySelector(
+                                    '.hide-btn'
+                                );
 
                         if (hideBtn) {
                             hideBtn.classList.remove(
@@ -2445,20 +3553,20 @@ function renderToolScripts(
                 );
         }
 
-        function showQrcode(
-            button
-        ) {
+        function showQrcode(button) {
 
             const qrcodeDiv =
                 document.getElementById(
                     'current-qrcode'
                 );
 
-            button.closest(
-                '.link-item'
-            ).appendChild(
-                qrcodeDiv
-            );
+            button
+                .closest(
+                    '.link-item'
+                )
+                .appendChild(
+                    qrcodeDiv
+                );
 
             qrcodeDiv.innerHTML =
                 '';
@@ -2490,9 +3598,7 @@ function renderToolScripts(
             );
         }
 
-        function hideQrcode(
-            button
-        ) {
+        function hideQrcode(button) {
 
             const qrcodeDiv =
                 document.getElementById(
@@ -2510,11 +3616,13 @@ function renderToolScripts(
             );
 
             const copyBtn =
-                button.closest(
-                    '.actions'
-                ).querySelector(
-                    '.copy-btn'
-                );
+                button
+                    .closest(
+                        '.actions'
+                    )
+                    .querySelector(
+                        '.copy-btn'
+                    );
 
             if (copyBtn) {
                 copyBtn.classList.remove(
@@ -2523,7 +3631,11 @@ function renderToolScripts(
             }
         }
 
-        ${includeEditor ? `
+    `;
+
+    if (includeEditor) {
+
+        script += `
 
         function openSecurityModal() {
 
@@ -2541,9 +3653,67 @@ function renderToolScripts(
                 'none';
         }
 
-        function saveConfig(
-            button
-        ) {
+        function openDisguiseModal() {
+
+            document.getElementById(
+                'disguiseModal'
+            ).style.display =
+                'flex';
+        }
+
+        function closeDisguiseModal() {
+
+            document.getElementById(
+                'disguiseModal'
+            ).style.display =
+                'none';
+        }
+
+        function updateDisguiseFields() {
+
+            const mode =
+                document.getElementById(
+                    'config-disguise-mode'
+                ).value;
+
+            const urlField =
+                document.getElementById(
+                    'disguise-url-field'
+                );
+
+            const url302Field =
+                document.getElementById(
+                    'disguise-url302-field'
+                );
+
+            const htmlField =
+                document.getElementById(
+                    'disguise-html-field'
+                );
+
+            if (urlField) {
+                urlField.style.display =
+                    mode === 'url'
+                        ? 'block'
+                        : 'none';
+            }
+
+            if (url302Field) {
+                url302Field.style.display =
+                    mode === 'url302'
+                        ? 'block'
+                        : 'none';
+            }
+
+            if (htmlField) {
+                htmlField.style.display =
+                    mode === 'html'
+                        ? 'block'
+                        : 'none';
+            }
+        }
+
+        function saveConfig(button) {
 
             const statusElem =
                 document.getElementById(
@@ -2591,7 +3761,7 @@ function renderToolScripts(
 
             if (
                 button.id ===
-                    'saveSecBtn' &&
+                'saveSecBtn' &&
                 secPass !== secPass2
             ) {
 
@@ -2701,9 +3871,7 @@ function renderToolScripts(
                     statusElem.style.color =
                         '#c62828';
 
-                    console.error(
-                        err
-                    );
+                    console.error(err);
                 }
             )
             .finally(
@@ -2714,16 +3882,139 @@ function renderToolScripts(
 
                     button.textContent =
                         button.id ===
-                            'saveSecBtn'
+                        'saveSecBtn'
                             ? '保存修改'
                             : '保存全局设置并重载';
                 }
             );
         }
 
-        function saveContent(
-            button
-        ) {
+        function saveDisguise(button) {
+
+            const statusElem =
+                document.getElementById(
+                    'disguiseSaveStatus'
+                );
+
+            const mode =
+                document.getElementById(
+                    'config-disguise-mode'
+                ).value;
+
+            const html =
+                document.getElementById(
+                    'config-disguise-html'
+                ).value;
+
+            if (
+                mode === 'html' &&
+                !html.trim()
+            ) {
+
+                alert(
+                    'HTML 模式不允许留空！'
+                );
+
+                return;
+            }
+
+            button.disabled =
+                true;
+
+            button.textContent =
+                '保存中...';
+
+            fetch(
+                window.location.href,
+                {
+                    method:
+                        'POST',
+
+                    body:
+                        JSON.stringify(
+                            {
+                                type:
+                                    'disguise',
+
+                                settings:
+                                    {
+                                        disguiseMode:
+                                            mode,
+
+                                        disguiseURL:
+                                            document.getElementById(
+                                                'config-disguise-url'
+                                            ).value,
+
+                                        disguiseURL302:
+                                            document.getElementById(
+                                                'config-disguise-url302'
+                                            ).value,
+
+                                        disguiseHTML:
+                                            html
+                                    }
+                            }
+                        ),
+
+                    headers:
+                        {
+                            'Content-Type':
+                                'application/json'
+                        }
+                }
+            )
+            .then(
+                async function (res) {
+
+                    const text =
+                        await res.text();
+
+                    if (!res.ok) {
+                        throw new Error(
+                            text ||
+                            'HTTP ' +
+                            res.status
+                        );
+                    }
+
+                    statusElem.textContent =
+                        text;
+
+                    statusElem.style.color =
+                        '#2e7d32';
+
+                    setTimeout(
+                        () =>
+                            window.location.reload(),
+                        500
+                    );
+                }
+            )
+            .catch(
+                function (err) {
+
+                    statusElem.textContent =
+                        '保存失败: ' +
+                        err.message;
+
+                    statusElem.style.color =
+                        '#c62828';
+                }
+            )
+            .finally(
+                function () {
+
+                    button.disabled =
+                        false;
+
+                    button.textContent =
+                        '保存伪装页设置';
+                }
+            );
+        }
+
+        function saveContent(button) {
 
             const textarea =
                 document.getElementById(
@@ -2803,10 +4094,6 @@ function renderToolScripts(
 
                     statusElem.style.color =
                         '#c62828';
-
-                    console.error(
-                        err
-                    );
                 }
             )
             .finally(
@@ -2821,177 +4108,177 @@ function renderToolScripts(
             );
         }
 
-        ` : ''}
+        `;
 
-    </script>`;
+    }
+
+    script +=
+        '<\\/sc' +
+        'ript>';
+
+    return script;
 }
+
+// ============================================================
+// 登录页面
+// ============================================================
 
 function renderLoginPage(
     url,
     error = ''
 ) {
 
-    return `<!DOCTYPE html>
-<html>
+    let errorHtml =
+        error
+            ? '<div class="error">' +
+              escapeHTML(error) +
+              '</div>'
+            : '';
 
-<head>
+    let html =
+        '<!DOCTYPE html>' +
+        '<html>' +
+        '<head>' +
+        '<title>' +
+        escapeHTML(FileName) +
+        ' 管理员登录</title>' +
+        '<meta charset="utf-8">' +
+        '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+        '<style>' +
+        getToolStyles() +
+        `
+        .login-btn {
+            display: block;
+            width: 100%;
+            max-width: 280px;
+            min-height: 44px;
+            margin: 28px auto 6px;
+            background:
+                rgba(
+                    34,
+                    34,
+                    34,
+                    0.85
+                );
+            border:
+                1px solid
+                rgba(
+                    34,
+                    34,
+                    34,
+                    0.2
+                );
+            border-radius: 12px;
+            color: #fff;
+            font-size: 15px;
+            font-weight: 600;
+            cursor: pointer;
+            transition:
+                all 0.3s ease;
+        }
 
-<title>
-${escapeHTML(FileName)}
-</title>
+        .login-btn:hover {
+            background:
+                rgba(
+                    34,
+                    34,
+                    34,
+                    0.95
+                );
+            box-shadow:
+                0 4px 12px
+                rgba(
+                    0,
+                    0,
+                    0,
+                    0.15
+                );
+        }
 
-<meta charset="utf-8">
+        @media (
+            prefers-color-scheme: dark
+        ) {
 
-<meta
-name="viewport"
-content="width=device-width, initial-scale=1"
->
+            .login-btn {
+                background:
+                    rgba(
+                        80,
+                        80,
+                        80,
+                        0.9
+                    );
+                border-color:
+                    rgba(
+                        255,
+                        255,
+                        255,
+                        0.2
+                    );
+            }
 
-<style>
+            .login-btn:hover {
+                background:
+                    rgba(
+                        100,
+                        100,
+                        100,
+                        1
+                    );
+            }
+        }
 
-${getToolStyles()}
+        .error {
+            text-align: center;
+            margin-top: 15px;
+            color: #c62828;
+        }
+        ` +
+        '</style>' +
+        '</head>';
 
-.login-btn {
-    display: block;
-    width: 100%;
-    max-width: 280px;
-    min-height: 44px;
-    margin: 28px auto 6px;
-    background: #2f3338;
-    border: 1px solid #343a40;
-    border-radius: 12px;
-    color: #fff;
-    font-size: 15px;
-    font-weight: 600;
-    cursor: pointer;
-    transition: all 0.3s ease;
+    html +=
+        '<body style="display:flex; justify-content:center; align-items:center; min-height:100vh; margin:0;">';
+
+    html +=
+        '<main class="page" style="width:100%; max-width:420px; padding:20px; margin:0;">';
+
+    html +=
+        '<section class="panel" style="padding:30px 24px; text-align:center;">';
+
+    html +=
+        '<h1 class="title" style="margin-bottom:10px;">' +
+        escapeHTML(FileName) +
+        '</h1>';
+
+    html +=
+        '<div class="subtitle" style="margin-bottom:24px;">请登录管理员控制台</div>';
+
+    html +=
+        '<form method="POST" action="' +
+        escapeHTML(url.pathname) +
+        '" style="text-align:left;">';
+
+    html +=
+        '<div class="field"><label>用户名</label><input name="username" type="text" required autofocus></div>';
+
+    html +=
+        '<div class="field"><label>密码</label><input name="password" type="password" required></div>';
+
+    html +=
+        '<button type="submit" class="login-btn">登录</button>';
+
+    html +=
+        errorHtml;
+
+    html +=
+        '</form></section></main></body></html>';
+
+    return html;
 }
 
-.login-btn:hover {
-    background: #1f2327;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
-}
-
-@media (prefers-color-scheme: dark) {
-
-    .login-btn {
-        background: #3f4650;
-        border-color: #69717c;
-    }
-
-    .login-btn:hover {
-        background: #525b67;
-        border-color: #858f9b;
-    }
-}
-
-.error {
-    text-align: center;
-    margin-top: 15px;
-    color: #c62828;
-}
-
-</style>
-
-</head>
-
-<body
-style="
-display:flex;
-justify-content:center;
-align-items:center;
-min-height:100vh;
-margin:0;
-"
->
-
-<main
-class="page"
-style="
-width:100%;
-max-width:420px;
-padding:20px;
-margin:0;
-"
->
-
-<section
-class="panel"
-style="
-padding:30px 24px;
-text-align:center;
-"
->
-
-<h1
-class="title"
-style="margin-bottom:10px;"
->
-${escapeHTML(FileName)}
-</h1>
-
-<div
-class="subtitle"
-style="margin-bottom:24px;"
->
-请登录管理员控制台
-</div>
-
-<form
-method="POST"
-action="${escapeHTML(url.pathname)}"
-style="text-align:left;"
->
-
-<div class="field">
-
-<label>
-用户名
-</label>
-
-<input
-name="username"
-type="text"
-required
-autofocus
->
-
-</div>
-
-<div class="field">
-
-<label>
-密码
-</label>
-
-<input
-name="password"
-type="password"
-required
->
-
-</div>
-
-<button
-type="submit"
-class="login-btn"
->
-登录
-</button>
-
-${error
-    ? `<div class="error">${escapeHTML(error)}</div>`
-    : ''}
-
-</form>
-
-</section>
-
-</main>
-
-</body>
-</html>`;
-}
+// ============================================================
+// 访客页面
+// ============================================================
 
 function renderGuestPage(
     url,
@@ -3004,194 +4291,186 @@ function renderGuestPage(
 ) {
 
     let apiHtml = '';
+    let apiCss = '';
 
     if (apiStatus === 'ok') {
 
         apiHtml =
-            `✅SUBAPI状态正常${
+            '✅SUBAPI状态正常' +
+            (
                 apiVersion
-                    ? ` (${escapeHTML(apiVersion)})`
+                    ? ' (' +
+                      escapeHTML(
+                          apiVersion
+                      ) +
+                      ')'
                     : ''
-            }`;
+            );
+
+        apiCss =
+            'status-ok';
+
+    } else if (
+        apiStatus === 'empty'
+    ) {
+
+        apiHtml =
+            '⚠️SUBAPI为空 已切换为默认配置 ' +
+            '✅默认值可用';
+
+        apiCss =
+            'status-warn';
+
+    } else if (
+        apiStatus === 'invalid'
+    ) {
+
+        apiHtml =
+            '⚠️SUBAPI无效 已切换为默认配置 ' +
+            '✅默认值可用';
+
+        apiCss =
+            'status-warn';
 
     } else {
 
         apiHtml =
-            `⚠️SUBAPI无效(为空) 已切换为默认配置`;
+            '❌SUBAPI无效待维护';
+
+        apiCss =
+            'status-error';
     }
 
     let configHtml = '';
+    let configCss = '';
 
-    if (configStatus === 'ok') {
+    if (
+        configStatus === 'ok'
+    ) {
 
         configHtml =
-            `✅SUBCONFIG状态正常`;
+            '✅SUBCONFIG状态正常';
+
+        configCss =
+            'status-ok';
+
+    } else if (
+        configStatus === 'empty'
+    ) {
+
+        configHtml =
+            '⚠️SUBCONFIG为空 已切换为默认配置 ' +
+            '✅默认值可用';
+
+        configCss =
+            'status-warn';
+
+    } else if (
+        configStatus === 'invalid'
+    ) {
+
+        configHtml =
+            '⚠️SUBCONFIG无效 已切换为默认配置 ' +
+            '✅默认值可用';
+
+        configCss =
+            'status-warn';
 
     } else {
 
         configHtml =
-            `⚠️SUBCONFIG无效(为空) 已切换为默认配置`;
+            '❌SUBCONFIG无效待维护';
+
+        configCss =
+            'status-error';
     }
 
-    return `<!DOCTYPE html>
+    let html =
+        '<!DOCTYPE html>' +
+        '<html>' +
+        '<head>' +
+        '<title>' +
+        escapeHTML(FileName) +
+        ' 访客订阅</title>' +
+        '<meta charset="utf-8">' +
+        '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+        '<style>' +
+        getToolStyles() +
+        '</style>' +
+        '<script src="https://cdn.jsdelivr.net/npm/@keeex/qrcodejs-kx@1.0.2/qrcode.min.js><\\/script>' +
+        '</head>' +
+        '<body>' +
+        '<div id="copyNotice" class="toast"></div>' +
+        '<main class="page">' +
+        '<header class="header">' +
+        '<h1 class="title">' +
+        escapeHTML(FileName) +
+        ' 访客订阅</h1>' +
+        '<div class="subtitle">复制订阅链接或生成二维码</div>' +
+        '</header>';
 
-<html>
+    html +=
+        '<section class="panel">' +
+        '<h2 class="section-title">订阅链接</h2>' +
+        renderLinkList(
+            getSubscriptionLinks(
+                url,
+                guest
+            )
+        ) +
+        '</section>';
 
-<head>
+    html +=
+        '<section class="panel">' +
+        '<h2 class="section-title">订阅转换服务</h2>' +
+        '<div class="link-list">';
 
-<title>
-${escapeHTML(FileName)}
-</title>
+    html +=
+        '<div class="link-item">' +
+        '<div class="link-label">订阅转换后端 SUBAPI</div>' +
+        '<div class="status-indicator ' +
+        apiCss +
+        '">' +
+        apiHtml +
+        '</div>' +
+        '<div class="section-note" style="margin-top:12px; margin-bottom:6px;">当前配置</div>' +
+        '<a class="link-url" href="' +
+        escapeHTML(displayApiUrl) +
+        '" target="_blank">' +
+        escapeHTML(displayApiUrl) +
+        '</a>' +
+        '</div>';
 
-<meta charset="utf-8">
+    html +=
+        '<div class="link-item">' +
+        '<div class="link-label">订阅转换规则 SUBCONFIG</div>' +
+        '<div class="status-indicator ' +
+        configCss +
+        '">' +
+        configHtml +
+        '</div>' +
+        '<div class="section-note" style="margin-top:12px; margin-bottom:6px;">当前配置</div>' +
+        '<a class="link-url" href="' +
+        escapeHTML(displayConfig) +
+        '" target="_blank">' +
+        escapeHTML(displayConfig) +
+        '</a>' +
+        '</div>';
 
-<meta
-name="viewport"
-content="width=device-width, initial-scale=1"
->
+    html +=
+        '</div>' +
+        '</section>' +
+        '<div id="current-qrcode"></div>' +
+        '</main>' +
+        renderToolScripts(false) +
+        '</body></html>';
 
-<style>
-${getToolStyles()}
-</style>
-
-<script
-src="https://cdn.jsdelivr.net/npm/@keeex/qrcodejs-kx@1.0.2/qrcode.min.js"
-></script>
-
-</head>
-
-<body>
-
-<div
-id="copyNotice"
-class="toast"
-></div>
-
-<main class="page">
-
-<header class="header">
-
-<h1 class="title">
-${escapeHTML(FileName)} 访客订阅
-</h1>
-
-<div class="subtitle">
-复制订阅链接或生成二维码
-</div>
-
-</header>
-
-<section class="panel">
-
-<h2 class="section-title">
-订阅链接
-</h2>
-
-${renderLinkList(
-    getSubscriptionLinks(
-        url,
-        guest
-    )
-)}
-
-</section>
-
-<section class="panel">
-
-<h2 class="section-title">
-订阅转换服务
-</h2>
-
-<div class="link-list">
-
-<div class="link-item">
-
-<div class="link-label">
-订阅转换后端 SUBAPI
-</div>
-
-<div
-class="status-indicator ${
-    apiStatus === 'ok'
-        ? 'status-ok'
-        : 'status-warn'
-}"
->
-${apiHtml}
-</div>
-
-<div
-class="section-note"
-style="
-margin-top:12px;
-margin-bottom:6px;
-"
->
-当前配置
-</div>
-
-<a
-class="link-url"
-href="${escapeHTML(displayApiUrl)}"
-target="_blank"
->
-${escapeHTML(displayApiUrl)}
-</a>
-
-</div>
-
-<div class="link-item">
-
-<div class="link-label">
-订阅转换规则 SUBCONFIG
-</div>
-
-<div
-class="status-indicator ${
-    configStatus === 'ok'
-        ? 'status-ok'
-        : 'status-warn'
-}"
->
-${configHtml}
-</div>
-
-<div
-class="section-note"
-style="
-margin-top:12px;
-margin-bottom:6px;
-"
->
-当前配置
-</div>
-
-<a
-class="link-url"
-href="${escapeHTML(displayConfig)}"
-target="_blank"
->
-${escapeHTML(displayConfig)}
-</a>
-
-</div>
-
-</div>
-
-</section>
-
-<div
-id="current-qrcode"
-></div>
-
-</main>
-
-${renderToolScripts(false)}
-
-</body>
-
-</html>`;
+    return html;
 }
+
+// ============================================================
+// 管理员页面
+// ============================================================
 
 function renderAdminPage(
     url,
@@ -3202,466 +4481,563 @@ function renderAdminPage(
     configStatus,
     currentApi,
     currentConfig,
-    apiVersion
+    apiVersion,
+    disguiseStatus
 ) {
 
     let adminApiHtml = '';
     let apiCss = '';
 
-    if (apiStatus === 'ok') {
+    if (
+        apiStatus === 'ok'
+    ) {
 
         adminApiHtml =
-            `✅SUBAPI状态正常${
+            '✅SUBAPI状态正常' +
+            (
                 apiVersion
-                    ? ` (${escapeHTML(apiVersion)})`
+                    ? ' (' +
+                      escapeHTML(
+                          apiVersion
+                      ) +
+                      ')'
                     : ''
-            }`;
+            );
 
         apiCss =
             'status-ok';
 
-    } else {
+    } else if (
+        apiStatus === 'empty'
+    ) {
 
         adminApiHtml =
-            `⚠️SUBAPI无效(为空) 已切换为默认配置`;
+            '⚠️SUBAPI为空 已切换为默认配置 ' +
+            '✅默认值可用';
 
         apiCss =
             'status-warn';
+
+    } else if (
+        apiStatus === 'invalid'
+    ) {
+
+        adminApiHtml =
+            '⚠️SUBAPI无效 已切换为默认配置 ' +
+            '✅默认值可用';
+
+        apiCss =
+            'status-warn';
+
+    } else {
+
+        adminApiHtml =
+            '❌SUBAPI无效待维护';
+
+        apiCss =
+            'status-error';
     }
 
     let adminConfigHtml = '';
     let configCss = '';
 
-    if (configStatus === 'ok') {
+    if (
+        configStatus === 'ok'
+    ) {
 
         adminConfigHtml =
-            `✅SUBCONFIG状态正常`;
+            '✅SUBCONFIG状态正常';
 
         configCss =
             'status-ok';
 
-    } else {
+    } else if (
+        configStatus === 'empty'
+    ) {
 
         adminConfigHtml =
-            `⚠️SUBCONFIG无效(为空) 已切换为默认配置`;
+            '⚠️SUBCONFIG为空 已切换为默认配置 ' +
+            '✅默认值可用';
 
         configCss =
             'status-warn';
+
+    } else if (
+        configStatus === 'invalid'
+    ) {
+
+        adminConfigHtml =
+            '⚠️SUBCONFIG无效 已切换为默认配置 ' +
+            '✅默认值可用';
+
+        configCss =
+            'status-warn';
+
+    } else {
+
+        adminConfigHtml =
+            '❌SUBCONFIG无效待维护';
+
+        configCss =
+            'status-error';
     }
 
-    return `<!DOCTYPE html>
-
-<html>
-
-<head>
-
-<title>
-${escapeHTML(settings.subName)}
-</title>
-
-<meta charset="utf-8">
-
-<meta
-name="viewport"
-content="width=device-width, initial-scale=1"
->
-
-<style>
-${getToolStyles()}
-</style>
-
-<script
-src="https://cdn.jsdelivr.net/npm/@keeex/qrcodejs-kx@1.0.2/qrcode.min.js"
-></script>
-
-</head>
-
-<body>
-
-<div
-id="copyNotice"
-class="toast"
-></div>
-
-<div
-id="securityModal"
-class="modal-overlay"
->
-
-<div
-class="modal-content"
->
-
-<h2
-class="section-title"
-style="
-font-size:20px;
-margin-bottom:20px;
-"
->
-🛡️ 账户与安全设置
-</h2>
-
-<div class="field">
-
-<label>
-访客订阅入口 (GUEST)
-</label>
-
-<input
-id="sec-guest"
-type="text"
-value="${escapeHTML(settings.guest || '')}"
-placeholder="留空则按内置算法自动生成"
->
-
-</div>
-
-<div class="field">
-
-<label>
-后台登录账号 (USER)
-</label>
-
-<input
-id="sec-user"
-type="text"
-value="${escapeHTML(settings.user || '')}"
-placeholder="例如：admin"
->
-
-</div>
-
-<div class="field">
-
-<label>
-后台登录密码 (PASS)
-</label>
-
-<input
-id="sec-pass"
-type="password"
-value=""
-placeholder="留空则不修改当前密码"
->
-
-</div>
-
-<div class="field">
-
-<label>
-确认登录密码
-</label>
-
-<input
-id="sec-pass2"
-type="password"
-value=""
-placeholder="留空则不修改当前密码"
->
-
-</div>
-
-<div
-class="actions"
-style="
-margin-top:24px;
-justify-content:flex-end;
-"
->
-
-<button
-type="button"
-class="secondary"
-onclick="closeSecurityModal()"
->
-取消
-</button>
-
-<button
-type="button"
-id="saveSecBtn"
-onclick="saveConfig(this)"
->
-保存修改
-</button>
-
-</div>
-
-<span
-id="secSaveStatus"
-class="muted"
-style="
-display:block;
-text-align:right;
-margin-top:8px;
-"
-></span>
-
-</div>
-
-</div>
-
-<main class="page">
-
-<header
-class="header"
-style="
-display:flex;
-justify-content:space-between;
-align-items:center;
-flex-wrap:wrap;
-gap:10px;
-"
->
-
-<div>
-
-<h1 class="title">
-${escapeHTML(settings.subName)}
-</h1>
-
-<div class="subtitle">
-汇聚订阅控制台
-</div>
-
-</div>
-
-<div
-style="
-display:flex;
-gap:8px;
-"
->
-
-${hasKV
-    ? `<button
-        type="button"
-        onclick="openSecurityModal()"
-    >
-        🛡️ 安全设置
-    </button>`
-    : ''}
-
-<button
-type="button"
-class="danger"
-onclick="window.location.href='?logout=1'"
->
-🚪 退出
-</button>
-
-</div>
-
-</header>
-
-<section class="panel">
-
-<h2 class="section-title">
-全局名称设置 (SUBNAME)
-</h2>
-
-<div class="field">
-
-<input
-id="config-subname"
-type="text"
-value="${escapeHTML(settings.subName)}"
-placeholder="例如：CF-SUB"
->
-
-</div>
-
-</section>
-
-<section class="panel">
-
-<h2 class="section-title">
-订阅转换后端 SUBAPI
-</h2>
-
-<div class="field">
-
-<input
-id="config-subapi"
-type="text"
-value="${escapeHTML(settings.subApi || '')}"
-placeholder="[默认值]"
->
-
-<div
-class="status-indicator ${apiCss}"
-style="margin-top:8px;"
->
-${adminApiHtml}
-</div>
-
-<div
-class="section-note"
-style="
-margin-top:12px;
-margin-bottom:6px;
-"
->
-当前配置
-</div>
-
-<a
-class="link-url"
-href="${escapeHTML(currentApi)}"
-target="_blank"
->
-${escapeHTML(currentApi)}
-</a>
-
-</div>
-
-</section>
-
-<section class="panel">
-
-<h2 class="section-title">
-订阅转换规则 SUBCONFIG
-</h2>
-
-<div class="field">
-
-<textarea
-id="config-subconfig"
-style="min-height:80px"
-placeholder="[默认值]"
->${escapeHTML(settings.subConfig || '')}</textarea>
-
-<div
-class="status-indicator ${configCss}"
-style="margin-top:8px;"
->
-${adminConfigHtml}
-</div>
-
-<div
-class="section-note"
-style="
-margin-top:12px;
-margin-bottom:6px;
-"
->
-当前配置
-</div>
-
-<a
-class="link-url"
-href="${escapeHTML(currentConfig)}"
-target="_blank"
->
-${escapeHTML(currentConfig)}
-</a>
-
-</div>
-
-</section>
-
-<section class="panel">
-
-<h2 class="section-title">
-去广告关键字 NOADS
-</h2>
-
-<div class="field">
-
-<textarea
-id="config-noads"
-style="min-height:80px;"
-placeholder="示例: 加入TG群, 订阅YouTube频道, https://t.me ......"
->${escapeHTML(settings.noAds)}</textarea>
-
-<div class="section-note">
-使用英文逗号、空格或换行分隔
-</div>
-
-</div>
-
-${hasKV
-    ? `<div
-        class="actions"
-        style="margin-top:16px;"
-    >
-
-    <button
-        type="button"
-        onclick="saveConfig(this)"
-    >
-        保存全局设置并重载
-    </button>
-
-    <span
-        id="configSaveStatus"
-        class="muted"
-    ></span>
-
-    </div>`
-    : '<p class="muted">请绑定变量名称为 KV 的 KV 命名空间</p>'}
-
-</section>
-
-<section class="panel">
-
-<h2 class="section-title">
-汇聚订阅节点编辑
-</h2>
-
-${hasKV
-    ? `<textarea
-        id="content"
-        placeholder="在此输入单节点链接或订阅地址..."
-    >${escapeHTML(content)}</textarea>
-
-    <div class="actions">
-
-        <button
-            type="button"
-            onclick="saveContent(this)"
-        >
-            保存节点订阅
-        </button>
-
-        <span
-            id="saveStatus"
-            class="muted"
-        ></span>
-
-    </div>`
-    : '<p class="muted">请绑定变量名称为 KV 的 KV 命名空间</p>'}
-
-</section>
-
-<section class="panel">
-
-<h2 class="section-title">
-管理员直接订阅链接
-</h2>
-
-${renderLinkList(
-    getSubscriptionLinks(
-        url,
-        mytoken
-    )
-)}
-
-</section>
-
-<div
-id="current-qrcode"
-></div>
-
-</main>
-
-${renderToolScripts(true)}
-
-</body>
-
-</html>`;
+    const actualDisguiseMode =
+        normalizeDisguiseMode(
+            settings.disguiseMode
+        );
+
+    const disguiseStatusSafe =
+        disguiseStatus ||
+        {
+            mode:
+                actualDisguiseMode,
+
+            available:
+                actualDisguiseMode ===
+                'off',
+
+            label:
+                actualDisguiseMode ===
+                'off'
+                    ? '关闭（原生 Nginx）'
+                    : '状态检测失败'
+        };
+
+    let disguiseCss =
+        disguiseStatusSafe.available
+            ? 'status-ok'
+            : 'status-warn';
+
+    let disguiseStatusHtml =
+        disguiseStatusSafe.available
+            ? '✅伪装页可用'
+            : '⚠️伪装页不可用，实际使用原生 Nginx';
+
+    let securityBtn =
+        hasKV
+            ? '<button type="button" onclick="openSecurityModal()">🛡️ 安全设置</button>'
+            : '';
+
+    let disguiseBtn =
+        hasKV
+            ? '<button type="button" onclick="openDisguiseModal()">🕶️ 伪装页面</button>'
+            : '';
+
+    let saveGlobalBtn =
+        hasKV
+            ? '<div class="actions" style="margin-top:16px;">' +
+              '<button type="button" onclick="saveConfig(this)">保存全局设置并重载</button>' +
+              '<span id="configSaveStatus" class="muted"></span>' +
+              '</div>'
+            : '<p class="muted">请绑定变量名称为 KV 的 KV 命名空间</p>';
+
+    let nodeEditArea =
+        hasKV
+            ? '<textarea id="content" placeholder="在此输入单节点链接或订阅地址...">' +
+              escapeHTML(content) +
+              '</textarea>' +
+              '<div class="actions">' +
+              '<button type="button" onclick="saveContent(this)">保存节点订阅</button>' +
+              '<span id="saveStatus" class="muted"></span>' +
+              '</div>'
+            : '<p class="muted">请绑定变量名称为 KV 的 KV 命名空间</p>';
+
+    let html =
+        '<!DOCTYPE html>' +
+        '<html>' +
+        '<head>' +
+        '<title>' +
+        escapeHTML(settings.subName) +
+        ' - 控制台</title>' +
+        '<meta charset="utf-8">' +
+        '<meta name="viewport" content="width=device-width, initial-scale=1">' +
+        '<style>' +
+        getToolStyles() +
+        '</style>' +
+        '<script src="https://cdn.jsdelivr.net/npm/@keeex/qrcodejs-kx@1.0.2/qrcode.min.js><\\/script>' +
+        '</head>' +
+        '<body>';
+
+    html +=
+        '<div id="copyNotice" class="toast"></div>';
+
+    // ========================================================
+    // 安全设置
+    // ========================================================
+
+    html +=
+        '<div id="securityModal" class="modal-overlay">' +
+        '<div class="modal-content">' +
+        '<h2 class="section-title" style="font-size:20px; margin-bottom:20px;">🛡️ 账户与安全设置</h2>' +
+
+        '<div class="field">' +
+        '<label>访客订阅入口 (GUEST)</label>' +
+        '<input id="sec-guest" type="text" value="' +
+        escapeHTML(
+            settings.guest || ''
+        ) +
+        '" placeholder="留空则按内置算法自动生成">' +
+        '</div>' +
+
+        '<div class="field">' +
+        '<label>后台登录账号 (USER)</label>' +
+        '<input id="sec-user" type="text" value="' +
+        escapeHTML(
+            settings.user || ''
+        ) +
+        '" placeholder="例如：admin">' +
+        '</div>' +
+
+        '<div class="field">' +
+        '<label>后台登录密码 (PASS)</label>' +
+        '<input id="sec-pass" type="password" value="" placeholder="留空则不修改当前密码">' +
+        '</div>' +
+
+        '<div class="field">' +
+        '<label>确认登录密码</label>' +
+        '<input id="sec-pass2" type="password" value="" placeholder="留空则不修改当前密码">' +
+        '</div>' +
+
+        '<div class="actions" style="margin-top:24px; justify-content:flex-end;">' +
+        '<button type="button" class="secondary" onclick="closeSecurityModal()">取消</button>' +
+        '<button type="button" id="saveSecBtn" onclick="saveConfig(this)">保存修改</button>' +
+        '</div>' +
+
+        '<span id="secSaveStatus" class="muted" style="display:block; text-align:right; margin-top:8px;"></span>' +
+        '</div>' +
+        '</div>';
+
+    // ========================================================
+    // 伪装页面设置
+    // ========================================================
+
+    html +=
+        '<div id="disguiseModal" class="modal-overlay">' +
+        '<div class="modal-content" style="max-width:620px; max-height:90vh; overflow:auto;">' +
+
+        '<h2 class="section-title" style="font-size:20px; margin-bottom:20px;">🕶️ 伪装页面设置</h2>' +
+
+        '<div class="field">' +
+        '<label>伪装页面模式</label>' +
+
+        '<select id="config-disguise-mode" onchange="updateDisguiseFields()" style="width:100%; height:42px; border:1px solid rgba(207,207,200,0.6); border-radius:10px; padding:10px; background:rgba(255,255,255,0.8); color:#202124; font-size:14px;">' +
+
+        '<option value="off"' +
+        (
+            actualDisguiseMode ===
+            'off'
+                ? ' selected'
+                : ''
+        ) +
+        '>关闭（原生 Nginx）</option>' +
+
+        '<option value="url"' +
+        (
+            actualDisguiseMode ===
+            'url'
+                ? ' selected'
+                : ''
+        ) +
+        '>URL（反向代理）</option>' +
+
+        '<option value="url302"' +
+        (
+            actualDisguiseMode ===
+            'url302'
+                ? ' selected'
+                : ''
+        ) +
+        '>URL302（定向）</option>' +
+
+        '<option value="html"' +
+        (
+            actualDisguiseMode ===
+            'html'
+                ? ' selected'
+                : ''
+        ) +
+        '>HTML（自定义代码）</option>' +
+
+        '</select>' +
+        '</div>';
+
+    html +=
+        '<div id="disguise-url-field" class="field" style="display:' +
+        (
+            actualDisguiseMode ===
+            'url'
+                ? 'block'
+                : 'none'
+        ) +
+        ';">' +
+
+        '<label>URL（反向代理）</label>' +
+
+        '<input id="config-disguise-url" type="text" value="' +
+        escapeHTML(
+            settings.disguiseURL ||
+            ''
+        ) +
+        '" placeholder="例如：https://example.com">' +
+
+        '<div class="section-note">原来的 URL 变量，作为反向代理目标。</div>' +
+        '</div>';
+
+    html +=
+        '<div id="disguise-url302-field" class="field" style="display:' +
+        (
+            actualDisguiseMode ===
+            'url302'
+                ? 'block'
+                : 'none'
+        ) +
+        ';">' +
+
+        '<label>URL302（定向）</label>' +
+
+        '<input id="config-disguise-url302" type="text" value="' +
+        escapeHTML(
+            settings.disguiseURL302 ||
+            ''
+        ) +
+        '" placeholder="例如：https://example.com">' +
+
+        '<div class="section-note">原来的 URL302 变量，直接 302 跳转。</div>' +
+        '</div>';
+
+    html +=
+        '<div id="disguise-html-field" class="field" style="display:' +
+        (
+            actualDisguiseMode ===
+            'html'
+                ? 'block'
+                : 'none'
+        ) +
+        ';">' +
+
+        '<label>HTML / CODE（自定义 HTML 代码）</label>' +
+
+        '<textarea id="config-disguise-html" style="min-height:280px" placeholder="把 HTML 代码直接粘贴到这里；选择 HTML 模式后不可留空">' +
+        escapeHTML(
+            settings.disguiseHTML ||
+            ''
+        ) +
+        '</textarea>' +
+
+        '<div class="section-note">HTML 模式必须填写代码；页面标题会自动跟随 SUBNAME。</div>' +
+
+        '</div>';
+
+    html +=
+        '<div class="status-indicator ' +
+        disguiseCss +
+        '" style="margin-top:12px;">' +
+        disguiseStatusHtml +
+        '</div>';
+
+    html +=
+        '<div class="section-note">' +
+        '真实使用模式：' +
+        escapeHTML(
+            disguiseStatusSafe.label
+        ) +
+        '</div>';
+
+    html +=
+        '<div class="actions" style="margin-top:20px; justify-content:flex-end;">' +
+        '<button type="button" class="secondary" onclick="closeDisguiseModal()">取消</button>' +
+        '<button type="button" id="saveDisguiseBtn" onclick="saveDisguise(this)">保存伪装页设置</button>' +
+        '</div>' +
+
+        '<span id="disguiseSaveStatus" class="muted" style="display:block; text-align:right; margin-top:8px;"></span>' +
+
+        '</div>' +
+        '</div>';
+
+    // ========================================================
+    // 页面主体
+    // ========================================================
+
+    html +=
+        '<main class="page">' +
+
+        '<header class="header" style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px;">' +
+
+        '<div>' +
+        '<h1 class="title">' +
+        escapeHTML(
+            settings.subName
+        ) +
+        '</h1>' +
+        '<div class="subtitle">汇聚订阅控制台</div>' +
+        '</div>' +
+
+        '<div style="display:flex; gap:8px;">' +
+
+        securityBtn +
+        disguiseBtn +
+
+        '<button type="button" class="danger" onclick="window.location.href=\'?logout=1\'">🚪 退出</button>' +
+
+        '</div>' +
+        '</header>';
+
+    // ========================================================
+    // SUBNAME
+    // ========================================================
+
+    html +=
+        '<section class="panel">' +
+        '<h2 class="section-title">全局名称设置 (SUBNAME)</h2>' +
+        '<div class="field">' +
+        '<input id="config-subname" type="text" value="' +
+        escapeHTML(
+            settings.subName
+        ) +
+        '" placeholder="例如：CF-SUB">' +
+        '</div>' +
+        '</section>';
+
+    // ========================================================
+    // SUBAPI
+    // ========================================================
+
+    html +=
+        '<section class="panel">' +
+        '<h2 class="section-title">订阅转换后端 SUBAPI</h2>' +
+        '<div class="field">' +
+
+        '<input id="config-subapi" type="text" value="' +
+        escapeHTML(
+            settings.subApi ||
+            ''
+        ) +
+        '" placeholder="[默认值]">' +
+
+        '<div class="status-indicator ' +
+        apiCss +
+        '" style="margin-top:8px;">' +
+        adminApiHtml +
+        '</div>' +
+
+        '<div class="section-note" style="margin-top:12px; margin-bottom:6px;">当前配置</div>' +
+
+        '<a class="link-url" href="' +
+        escapeHTML(
+            currentApi
+        ) +
+        '" target="_blank">' +
+        escapeHTML(
+            currentApi
+        ) +
+        '</a>' +
+
+        '</div>' +
+        '</section>';
+
+    // ========================================================
+    // SUBCONFIG
+    // ========================================================
+
+    html +=
+        '<section class="panel">' +
+        '<h2 class="section-title">订阅转换规则 SUBCONFIG</h2>' +
+        '<div class="field">' +
+
+        '<textarea id="config-subconfig" style="min-height:80px" placeholder="[默认值]">' +
+        escapeHTML(
+            settings.subConfig ||
+            ''
+        ) +
+        '</textarea>' +
+
+        '<div class="status-indicator ' +
+        configCss +
+        '" style="margin-top:8px;">' +
+        adminConfigHtml +
+        '</div>' +
+
+        '<div class="section-note" style="margin-top:12px; margin-bottom:6px;">当前配置</div>' +
+
+        '<a class="link-url" href="' +
+        escapeHTML(
+            currentConfig
+        ) +
+        '" target="_blank">' +
+        escapeHTML(
+            currentConfig
+        ) +
+        '</a>' +
+
+        '</div>' +
+        '</section>';
+
+    // ========================================================
+    // NOADS
+    // ========================================================
+
+    html +=
+        '<section class="panel">' +
+        '<h2 class="section-title">去广告关键字 NOADS</h2>' +
+
+        '<div class="field">' +
+
+        '<textarea id="config-noads" style="min-height:80px;" placeholder="示例: 加入TG群, 订阅YouTube频道, https://t.me ......">' +
+        escapeHTML(
+            settings.noAds
+        ) +
+        '</textarea>' +
+
+        '<div class="section-note">使用英文逗号、空格或换行分隔</div>' +
+
+        '</div>' +
+
+        saveGlobalBtn +
+
+        '</section>';
+
+    // ========================================================
+    // 节点编辑
+    // ========================================================
+
+    html +=
+        '<section class="panel">' +
+        '<h2 class="section-title">汇聚订阅节点编辑</h2>' +
+        nodeEditArea +
+        '</section>';
+
+    // ========================================================
+    // 管理员订阅
+    // ========================================================
+
+    html +=
+        '<section class="panel">' +
+        '<h2 class="section-title">管理员直接订阅链接</h2>' +
+        renderLinkList(
+            getSubscriptionLinks(
+                url,
+                mytoken
+            )
+        ) +
+        '</section>';
+
+    html +=
+        '<div id="current-qrcode"></div>' +
+        '</main>' +
+
+        renderToolScripts(true) +
+
+        '<script>updateDisguiseFields();<\\/script>' +
+
+        '</body></html>';
+
+    return html;
 }
+
+// ============================================================
+// KV 管理
+// ============================================================
 
 async function KV(
     request,
@@ -3676,13 +5052,39 @@ async function KV(
 ) {
 
     let settings = {
-        subName: 'CF-SUB',
-        subApi: '',
-        subConfig: '',
-        noAds: '',
-        guest: '',
-        user: '',
-        pass: ''
+
+        subName:
+            'CF-SUB',
+
+        subApi:
+            '',
+
+        subConfig:
+            '',
+
+        noAds:
+            '',
+
+        guest:
+            '',
+
+        user:
+            '',
+
+        pass:
+            '',
+
+        disguiseMode:
+            'off',
+
+        disguiseURL:
+            '',
+
+        disguiseURL302:
+            '',
+
+        disguiseHTML:
+            ''
     };
 
     let hasKV =
@@ -3699,18 +5101,23 @@ async function KV(
 
             if (kvConfigStr) {
 
-                settings = {
-                    ...settings,
-                    ...JSON.parse(
-                        kvConfigStr
-                    )
-                };
+                settings =
+                    {
+                        ...settings,
+                        ...JSON.parse(
+                            kvConfigStr
+                        )
+                    };
             }
 
         } catch (e) {}
     }
 
     try {
+
+        // ========================================================
+        // POST
+        // ========================================================
 
         if (
             request.method ===
@@ -3752,49 +5159,219 @@ async function KV(
                 const data =
                     JSON.parse(text);
 
+                // ====================================================
+                // 全局设置
+                // ====================================================
+
                 if (
                     data.type ===
                     'config'
                 ) {
 
-                    if (
-                        !data.settings.pass
-                    ) {
+                    let oldConfig = {};
 
-                        let oldConfig = {};
+                    try {
 
-                        try {
+                        const oldKvStr =
+                            await env.KV.get(
+                                'CONFIG.json'
+                            );
 
-                            const oldKvStr =
-                                await env.KV.get(
-                                    'CONFIG.json'
+                        if (oldKvStr) {
+                            oldConfig =
+                                JSON.parse(
+                                    oldKvStr
                                 );
+                        }
 
-                            if (oldKvStr) {
+                    } catch (e) {}
 
-                                oldConfig =
-                                    JSON.parse(
-                                        oldKvStr
-                                    );
-                            }
+                    const nextSettings = {
 
-                        } catch (e) {}
+                        subName:
+                            data.settings.subName ??
+                            oldConfig.subName ??
+                            'CF-SUB',
 
-                        data.settings.pass =
+                        subApi:
+                            data.settings.subApi ??
+                            oldConfig.subApi ??
+                            '',
+
+                        subConfig:
+                            data.settings.subConfig ??
+                            oldConfig.subConfig ??
+                            '',
+
+                        noAds:
+                            data.settings.noAds ??
+                            oldConfig.noAds ??
+                            '',
+
+                        guest:
+                            data.settings.guest ??
+                            oldConfig.guest ??
+                            '',
+
+                        user:
+                            data.settings.user ??
+                            oldConfig.user ??
+                            '',
+
+                        pass:
+                            data.settings.pass ||
                             oldConfig.pass ||
-                            '';
-                    }
+                            '',
+
+                        // 保留原来的伪装页设置
+                        disguiseMode:
+                            oldConfig.disguiseMode ||
+                            'off',
+
+                        disguiseURL:
+                            oldConfig.disguiseURL ||
+                            '',
+
+                        disguiseURL302:
+                            oldConfig.disguiseURL302 ||
+                            '',
+
+                        disguiseHTML:
+                            oldConfig.disguiseHTML ||
+                            ''
+                    };
 
                     await env.KV.put(
                         'CONFIG.json',
                         JSON.stringify(
-                            data.settings
+                            nextSettings
                         )
                     );
 
                     return new Response(
                         "设置保存成功"
                     );
+
+                // ====================================================
+                // 伪装页设置
+                // ====================================================
+
+                } else if (
+                    data.type ===
+                    'disguise'
+                ) {
+
+                    let oldConfig = {};
+
+                    try {
+
+                        const oldKvStr =
+                            await env.KV.get(
+                                'CONFIG.json'
+                            );
+
+                        if (oldKvStr) {
+
+                            oldConfig =
+                                JSON.parse(
+                                    oldKvStr
+                                );
+                        }
+
+                    } catch (e) {}
+
+                    const mode =
+                        normalizeDisguiseMode(
+                            data.settings &&
+                            data.settings.disguiseMode
+                        );
+
+                    const nextHtml =
+                        String(
+                            data.settings &&
+                            data.settings.disguiseHTML ||
+                            ''
+                        );
+
+                    // HTML 模式绝对不允许为空
+                    if (
+                        mode === 'html' &&
+                        !nextHtml.trim()
+                    ) {
+
+                        return new Response(
+                            'HTML 模式不允许留空',
+                            {
+                                status: 400
+                            }
+                        );
+                    }
+
+                    const nextSettings = {
+
+                        subName:
+                            oldConfig.subName ||
+                            'CF-SUB',
+
+                        subApi:
+                            oldConfig.subApi ||
+                            '',
+
+                        subConfig:
+                            oldConfig.subConfig ||
+                            '',
+
+                        noAds:
+                            oldConfig.noAds ||
+                            '',
+
+                        guest:
+                            oldConfig.guest ||
+                            '',
+
+                        user:
+                            oldConfig.user ||
+                            '',
+
+                        pass:
+                            oldConfig.pass ||
+                            '',
+
+                        disguiseMode:
+                            mode,
+
+                        disguiseURL:
+                            String(
+                                data.settings &&
+                                data.settings.disguiseURL ||
+                                ''
+                            ).trim(),
+
+                        disguiseURL302:
+                            String(
+                                data.settings &&
+                                data.settings.disguiseURL302 ||
+                                ''
+                            ).trim(),
+
+                        disguiseHTML:
+                            nextHtml
+                    };
+
+                    await env.KV.put(
+                        'CONFIG.json',
+                        JSON.stringify(
+                            nextSettings
+                        )
+                    );
+
+                    return new Response(
+                        "伪装页设置保存成功"
+                    );
+
+                // ====================================================
+                // 节点订阅
+                // ====================================================
 
                 } else if (
                     data.type ===
@@ -3803,7 +5380,8 @@ async function KV(
 
                     await env.KV.put(
                         txt,
-                        data.content || ''
+                        data.content ||
+                        ''
                     );
 
                     return new Response(
@@ -3821,6 +5399,10 @@ async function KV(
                 );
             }
         }
+
+        // ========================================================
+        // 获取节点
+        // ========================================================
 
         let content = '';
 
@@ -3840,20 +5422,58 @@ async function KV(
             }
         }
 
+        // ========================================================
+        // 获取伪装页真实状态
+        // ========================================================
+
+        const disguiseStatus =
+            await getDisguiseStatus(
+                {
+                    mode:
+                        settings.disguiseMode,
+
+                    url:
+                        settings.disguiseURL ||
+                        env.URL ||
+                        '',
+
+                    url302:
+                        settings.disguiseURL302 ||
+                        env.URL302 ||
+                        '',
+
+                    html:
+                        settings.disguiseHTML ||
+                        ''
+                }
+            );
+
         return new Response(
+
             renderAdminPage(
                 new URL(
                     request.url
                 ),
+
                 content,
+
                 hasKV,
+
                 settings,
+
                 apiStatus,
+
                 configStatus,
+
                 currentApiUrl,
+
                 currentConfigUrl,
-                apiVersion
+
+                apiVersion,
+
+                disguiseStatus
             ),
+
             {
                 headers: {
                     "Content-Type":
