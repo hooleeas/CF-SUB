@@ -139,6 +139,11 @@ export default {
         // 无效路径优先返回主页
         if (!([mytoken, fakeToken, 访客订阅].includes(token) || url.pathname == ("/" + mytoken) || url.pathname.includes("/" + mytoken + "?") || guestPath)) {
             
+            // 【新增逻辑】：如果访问的不是根路径（例如 /abc 或 /无关字符），则强制 302 重定向到根目录 (主页)
+            if (url.pathname !== '/') {
+                return Response.redirect(url.origin + '/', 302);
+            }
+
             if (fakeMode === '1' && fakeUrl) {
                 try { return await proxyURL(fakeUrl, url, FileName); } catch (e) { }
             } else if (fakeMode === '2' && fakeUrl302) {
