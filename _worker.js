@@ -136,74 +136,19 @@ export default {
             'shadowrocket', 'subconverter'
         ].some(keyword => userAgent.includes(keyword));
 
-        // 无效路径优先返回静态首页或伪装页
+        // 无效路径优先返回伪装页
         if (!([mytoken, fakeToken, 访客订阅].includes(token) || url.pathname == ("/" + mytoken) || url.pathname.includes("/" + mytoken + "?") || guestPath)) {
             
-            // 模式 0：强制关闭伪装，直接返回 nginx
-            if (fakeMode === '0') {
-                return new Response(await nginx(FileName), { headers: { 'Content-Type': 'text/html; charset=UTF-8' } });
-            } 
-            // 模式 1：URL 反向代理
-            else if (fakeMode === '1') {
-                if (fakeUrl) {
-                    try {
-                        return await proxyURL(fakeUrl, url);
-                    } catch (e) {
-                        return new Response(await nginx(FileName), { headers: { 'Content-Type': 'text/html; charset=UTF-8' } });
-                    }
-                }
-                return new Response(await nginx(FileName), { headers: { 'Content-Type': 'text/html; charset=UTF-8' } });
-            } 
-            // 模式 2：302 重定向
-            else if (fakeMode === '2') {
-                if (fakeUrl302) return Response.redirect(fakeUrl302, 302);
-                return new Response(await nginx(FileName), { headers: { 'Content-Type': 'text/html; charset=UTF-8' } });
-            } 
-            // 模式 3：自定义 HTML
-            else if (fakeMode === '3') {
-                if (fakeCode && fakeCode.trim() !== '') {
-                    return new Response(fakeCode, { headers: { 'Content-Type': 'text/html; charset=UTF-8' } });
-                }
-                // HTML为空或异常自动回退Nginx
-                return new Response(await nginx(FileName), { headers: { 'Content-Type': 'text/html; charset=UTF-8' } });
-            } 
-            // 默认兼容模式（如果未设置假模式）
-            else {
-                if (env.ASSETS) {
-                    try {
-                        const assetReq = new Request(new URL('/', request.url), { method: 'GET', headers: { 'Accept': 'text/html,application/xhtml+xml' } });
-                        const assetRes = await env.ASSETS.fetch(assetReq);
-                        if (assetRes.ok) {
-                            const contentType = assetRes.headers.get('content-type') || '';
-                            if (contentType.includes('text/html')) {
-                                let html = await assetRes.text();
-                                const title = `<title>${escapeHTML(FileName)}</title>`;
-                                if (/<title\b[^>]*>[\s\S]*?<\/title>/i.test(html)) {
-                                    html = html.replace(/<title\b[^>]*>[\s\S]*?<\/title>/i, title);
-                                } else if (/<head\b[^>]*>/i.test(html)) {
-                                    html = html.replace(/<head\b[^>]*>/i, match => match + title);
-                                } else {
-                                    html = title + html;
-                                }
-                                const headers = new Headers(assetRes.headers);
-                                headers.set('Content-Type', 'text/html; charset=UTF-8');
-                                return new Response(html, { status: assetRes.status, headers });
-                            }
-                            return assetRes;
-                        }
-                    } catch (e) {
-                        console.error('ASSETS Fetch failed:', e);
-                    }
-                }
-
-                if (fakeUrl302) return Response.redirect(fakeUrl302, 302);
-                if (fakeUrl) {
-                    try {
-                        return await proxyURL(fakeUrl, url);
-                    } catch (e) {}
-                }
-                return new Response(await nginx(FileName), { headers: { 'Content-Type': 'text/html; charset=UTF-8' } });
+            if (fakeMode === '1' && fakeUrl) {
+                try { return await proxyURL(fakeUrl, url); } catch (e) { }
+            } else if (fakeMode === '2' && fakeUrl302) {
+                return Response.redirect(fakeUrl302, 302);
+            } else if (fakeMode === '3' && fakeCode && fakeCode.trim() !== '') {
+                return new Response(fakeCode, { headers: { 'Content-Type': 'text/html; charset=UTF-8' } });
             }
+            
+            // 模式 0，或配置为空/异常时，全部兜底返回原生 NGINX，彻底忽略同目录 HTML
+            return new Response(await nginx(FileName), { headers: { 'Content-Type': 'text/html; charset=UTF-8' } });
         } else {
 
             if (env.KV) {
@@ -278,63 +223,73 @@ export default {
                     let adminApiHtml = '';
                     let guestApiHtml = '';
                     let finalApiUrl = '';
-                    let apiCss = '';
+                    let adminApiCss = '';
+                    let guestApiCss = '';
 
                     if (hasCustomApi && customApiOk) {
                         adminApiHtml = `✅SUBAPI状态正常 (${escapeHTML(customApiVersion)})`;
                         guestApiHtml = adminApiHtml;
                         finalApiUrl = `${subProtocol}://${subConverter}`;
-                        apiCss = 'status-ok';
+                        adminApiCss = 'status-ok';
+                        guestApiCss = 'status-ok';
                     } else if (hasCustomApi && !customApiOk && defaultApiOk) {
                         adminApiHtml = `⚠️SUBAPI无效 已切换为默认配置 ✅默认值可用`;
                         guestApiHtml = `✅SUBAPI状态正常 (${escapeHTML(defaultApiVersion)})`;
                         finalApiUrl = `${defaultSubProtocol}://${defaultSubConverter}`;
-                        apiCss = 'status-warn';
+                        adminApiCss = 'status-warn';
+                        guestApiCss = 'status-ok';
                     } else if (!hasCustomApi && defaultApiOk) {
                         adminApiHtml = `⚠️SUBAPI为空 已切换为默认配置 ✅默认值可用`;
                         guestApiHtml = `✅SUBAPI状态正常 (${escapeHTML(defaultApiVersion)})`;
                         finalApiUrl = `${defaultSubProtocol}://${defaultSubConverter}`;
-                        apiCss = 'status-warn';
+                        adminApiCss = 'status-warn';
+                        guestApiCss = 'status-ok';
                     } else {
                         adminApiHtml = `❌SUBAPI无效待维护`;
                         guestApiHtml = adminApiHtml;
                         finalApiUrl = `${defaultSubProtocol}://${defaultSubConverter}`;
-                        apiCss = 'status-error';
+                        adminApiCss = 'status-error';
+                        guestApiCss = 'status-error';
                     }
 
                     // ====== 构造 CONFIG 状态 UI ======
                     let adminConfigHtml = '';
                     let guestConfigHtml = '';
                     let finalConfigUrl = '';
-                    let configCss = '';
+                    let adminConfigCss = '';
+                    let guestConfigCss = '';
 
                     if (hasCustomConfig && customConfigOk) {
                         adminConfigHtml = `✅SUBCONFIG状态正常`;
                         guestConfigHtml = adminConfigHtml;
                         finalConfigUrl = subConfig;
-                        configCss = 'status-ok';
+                        adminConfigCss = 'status-ok';
+                        guestConfigCss = 'status-ok';
                     } else if (hasCustomConfig && !customConfigOk && defaultConfigOk) {
                         adminConfigHtml = `⚠️SUBCONFIG无效 已切换为默认配置 ✅默认值可用`;
                         guestConfigHtml = `✅SUBCONFIG状态正常`;
                         finalConfigUrl = defaultSubConfig;
-                        configCss = 'status-warn';
+                        adminConfigCss = 'status-warn';
+                        guestConfigCss = 'status-ok';
                     } else if (!hasCustomConfig && defaultConfigOk) {
                         adminConfigHtml = `⚠️SUBCONFIG为空 已切换为默认配置 ✅默认值可用`;
                         guestConfigHtml = `✅SUBCONFIG状态正常`;
                         finalConfigUrl = defaultSubConfig;
-                        configCss = 'status-warn';
+                        adminConfigCss = 'status-warn';
+                        guestConfigCss = 'status-ok';
                     } else {
                         adminConfigHtml = `❌SUBCONFIG无效待维护`;
                         guestConfigHtml = adminConfigHtml;
                         finalConfigUrl = defaultSubConfig;
-                        configCss = 'status-error';
+                        adminConfigCss = 'status-error';
+                        guestConfigCss = 'status-error';
                     }
 
                     // ========================================================
 
                     if (guestPath) {
                         return new Response(
-                            renderGuestPage(url, 访客订阅, finalApiUrl, finalConfigUrl, guestApiHtml, guestConfigHtml, apiCss, configCss),
+                            renderGuestPage(url, 访客订阅, finalApiUrl, finalConfigUrl, guestApiHtml, guestConfigHtml, guestApiCss, guestConfigCss),
                             { headers: { 'Content-Type': 'text/html;charset=utf-8' } }
                         );
                     } else {
@@ -349,7 +304,7 @@ export default {
                         }
                         return await KV(
                             request, env, 'LINK.txt', 访客订阅,
-                            adminApiHtml, adminConfigHtml, finalApiUrl, finalConfigUrl, apiCss, configCss
+                            adminApiHtml, adminConfigHtml, finalApiUrl, finalConfigUrl, adminApiCss, adminConfigCss
                         );
                     }
 
@@ -1020,15 +975,15 @@ function renderAdminPage(url, content, hasKV, settings, adminApiHtml, adminConfi
     let fakeStatusCss = '';
     if (settings.fakeMode === '1') {
         if (settings.fakeUrl) { fakeStatusHtml = `✅ 当前使用: URL反向代理`; fakeStatusCss = 'status-ok'; }
-        else { fakeStatusHtml = `❌ 无效: 未填写URL，将使用原生NGINX`; fakeStatusCss = 'status-error'; }
+        else { fakeStatusHtml = `❌ 无效: 未填写URL，自动拦截为原生NGINX`; fakeStatusCss = 'status-error'; }
     } else if (settings.fakeMode === '2') {
         if (settings.fakeUrl302) { fakeStatusHtml = `✅ 当前使用: URL重定向(302)`; fakeStatusCss = 'status-ok'; }
-        else { fakeStatusHtml = `❌ 无效: 未填写目标地址，将使用原生NGINX`; fakeStatusCss = 'status-error'; }
+        else { fakeStatusHtml = `❌ 无效: 未填写目标地址，自动拦截为原生NGINX`; fakeStatusCss = 'status-error'; }
     } else if (settings.fakeMode === '3') {
         if (settings.fakeCode) { fakeStatusHtml = `✅ 当前使用: 自定义HTML`; fakeStatusCss = 'status-ok'; }
-        else { fakeStatusHtml = `❌ 无效: 代码为空，将自动回退原生NGINX`; fakeStatusCss = 'status-error'; }
+        else { fakeStatusHtml = `❌ 无效: 代码为空，自动拦截为原生NGINX`; fakeStatusCss = 'status-error'; }
     } else {
-        fakeStatusHtml = `✅ 当前使用: 默认防嗅探页面 (原生NGINX或同目录HTML)`;
+        fakeStatusHtml = `✅ 当前使用: 默认防嗅探 (原生NGINX 强制覆盖模式)`;
         fakeStatusCss = 'status-ok';
     }
 
@@ -1069,12 +1024,12 @@ function renderAdminPage(url, content, hasKV, settings, adminApiHtml, adminConfi
 <div class="field">
 <label>伪装模式</label>
 <select id="fake-mode" onchange="switchFakeMode()">
-    <option value="0" ${settings.fakeMode === '0' || settings.fakeMode === '' ? 'selected' : ''}>[关闭] 默认防嗅探</option>
+    <option value="0" ${settings.fakeMode === '0' || settings.fakeMode === '' ? 'selected' : ''}>[关闭] 强制原生 NGINX</option>
     <option value="1" ${settings.fakeMode === '1' ? 'selected' : ''}>[URL] 网页反向代理</option>
     <option value="2" ${settings.fakeMode === '2' ? 'selected' : ''}>[URL302] 强制重定向</option>
     <option value="3" ${settings.fakeMode === '3' ? 'selected' : ''}>[HTML] 自定义代码</option>
 </select>
-<div class="section-note">注意：此设置优先级最高，选择开启后将覆盖同目录下上传的HTML文件规则。</div>
+<div class="section-note">注意：此全局控制面板已彻底剥离同目录 HTML 依赖。</div>
 </div>
 <div class="field hidden" id="fake-group-url">
 <label>反代目标地址 (URL)</label>
