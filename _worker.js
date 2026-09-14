@@ -24,7 +24,7 @@ let subConfig = defaultSubConfig;
 let subProtocol = defaultSubProtocol;
 let config_noAds = '';
 
-// ================= 伪装页配置 =================
+// ================= 主页配置 =================
 let fakeMode = ''; // 0:关闭 1:URL反代 2:URL302 3:HTML
 let fakeUrl = '';
 let fakeUrl302 = '';
@@ -136,18 +136,28 @@ export default {
             'shadowrocket', 'subconverter'
         ].some(keyword => userAgent.includes(keyword));
 
-        // 无效路径优先返回伪装页
+        // 无效路径优先返回主页
         if (!([mytoken, fakeToken, 访客订阅].includes(token) || url.pathname == ("/" + mytoken) || url.pathname.includes("/" + mytoken + "?") || guestPath)) {
             
             if (fakeMode === '1' && fakeUrl) {
-                try { return await proxyURL(fakeUrl, url); } catch (e) { }
+                try { return await proxyURL(fakeUrl, url, FileName); } catch (e) { }
             } else if (fakeMode === '2' && fakeUrl302) {
                 return Response.redirect(fakeUrl302, 302);
             } else if (fakeMode === '3' && fakeCode && fakeCode.trim() !== '') {
-                return new Response(fakeCode, { headers: { 'Content-Type': 'text/html; charset=UTF-8' } });
+                // 动态注入标题
+                let html = fakeCode;
+                const title = `<title>${escapeHTML(FileName)}</title>`;
+                if (/<title\b[^>]*>[\s\S]*?<\/title>/i.test(html)) {
+                    html = html.replace(/<title\b[^>]*>[\s\S]*?<\/title>/i, title);
+                } else if (/<head\b[^>]*>/i.test(html)) {
+                    html = html.replace(/<head\b[^>]*>/i, match => match + title);
+                } else {
+                    html = title + html;
+                }
+                return new Response(html, { headers: { 'Content-Type': 'text/html; charset=UTF-8' } });
             }
             
-            // 模式 0，或配置为空/异常时，全部兜底返回原生 NGINX，彻底忽略同目录 HTML
+            // 模式 0，或配置为空/异常时，全部兜底返回原生 NGINX
             return new Response(await nginx(FileName), { headers: { 'Content-Type': 'text/html; charset=UTF-8' } });
         } else {
 
@@ -540,7 +550,8 @@ function clashFix(content) {
     return content;
 }
 
-async function proxyURL(proxyURL, url) {
+// 代理模式自动替换 HTML 标题
+async function proxyURL(proxyURL, url, titleName) {
     const URLs = await ADD(proxyURL);
     const fullURL = URLs[Math.floor(Math.random() * URLs.length)];
     let parsedURL = new URL(fullURL);
@@ -548,10 +559,38 @@ async function proxyURL(proxyURL, url) {
     if (URLPathname.charAt(URLPathname.length - 1) == '/') URLPathname = URLPathname.slice(0, -1);
     URLPathname += url.pathname;
     let newURL = `${parsedURL.protocol.slice(0, -1) || 'https'}://${parsedURL.hostname}${URLPathname}${parsedURL.search}`;
+    
     let response = await fetch(newURL);
-    let newResponse = new Response(response.body, { status: response.status, statusText: response.statusText, headers: response.headers });
-    newResponse.headers.set('X-New-URL', newURL);
-    return newResponse;
+    const contentType = response.headers.get('content-type') || '';
+    
+    // 如果反代的是网页，则动态注入配置文件名作为标题
+    if (contentType.includes('text/html')) {
+        let html = await response.text();
+        const title = `<title>${escapeHTML(titleName)}</title>`;
+        if (/<title\b[^>]*>[\s\S]*?<\/title>/i.test(html)) {
+            html = html.replace(/<title\b[^>]*>[\s\S]*?<\/title>/i, title);
+        } else if (/<head\b[^>]*>/i.test(html)) {
+            html = html.replace(/<head\b[^>]*>/i, match => match + title);
+        } else {
+            html = title + html;
+        }
+        let newResponse = new Response(html, {
+            status: response.status,
+            statusText: response.statusText,
+            headers: new Headers(response.headers)
+        });
+        newResponse.headers.delete('content-length');
+        newResponse.headers.set('X-New-URL', newURL);
+        return newResponse;
+    } else {
+        let newResponse = new Response(response.body, { 
+            status: response.status, 
+            statusText: response.statusText, 
+            headers: response.headers 
+        });
+        newResponse.headers.set('X-New-URL', newURL);
+        return newResponse;
+    }
 }
 
 async function getSUB(api, request, 追加UA, userAgentHeader) {
@@ -970,7 +1009,7 @@ ${renderToolScripts(false)}
 
 function renderAdminPage(url, content, hasKV, settings, adminApiHtml, adminConfigHtml, currentApi, currentConfig, apiCss, configCss) {
     
-    // 生成伪装页状态说明
+    // 生成主页状态说明
     let fakeStatusHtml = '';
     let fakeStatusCss = '';
     if (settings.fakeMode === '1') {
@@ -1016,20 +1055,19 @@ function renderAdminPage(url, content, hasKV, settings, adminApiHtml, adminConfi
 </div>
 </div>
 
-<!-- 伪装页设置 Modal -->
+<!-- 主页设置 Modal -->
 <div id="fakeModal" class="modal-overlay">
 <div class="modal-content">
-<h2 class="section-title" style="font-size:20px; margin-bottom:20px;">🎭 主页伪装设置</h2>
+<h2 class="section-title" style="font-size:20px; margin-bottom:20px;">🏠 主页设置</h2>
 <div class="status-indicator ${fakeStatusCss}" style="margin-bottom:16px;">${fakeStatusHtml}</div>
 <div class="field">
-<label>伪装模式</label>
+<label>主页模式</label>
 <select id="fake-mode" onchange="switchFakeMode()">
     <option value="0" ${settings.fakeMode === '0' || settings.fakeMode === '' ? 'selected' : ''}>[关闭] 强制原生 NGINX</option>
     <option value="1" ${settings.fakeMode === '1' ? 'selected' : ''}>[URL] 网页反向代理</option>
     <option value="2" ${settings.fakeMode === '2' ? 'selected' : ''}>[URL302] 强制重定向</option>
     <option value="3" ${settings.fakeMode === '3' ? 'selected' : ''}>[HTML] 自定义代码</option>
 </select>
-<div class="section-note">注意：此全局控制面板已彻底剥离同目录 HTML 依赖。</div>
 </div>
 <div class="field hidden" id="fake-group-url">
 <label>反代目标地址 (URL)</label>
@@ -1059,7 +1097,7 @@ function renderAdminPage(url, content, hasKV, settings, adminApiHtml, adminConfi
 <div class="subtitle">汇聚订阅控制台</div>
 </div>
 <div style="display:flex; gap:8px;">
-${hasKV ? `<button type="button" onclick="openFakeModal()">🎭 伪装页</button>
+${hasKV ? `<button type="button" onclick="openFakeModal()">🏠 主页</button>
            <button type="button" onclick="openSecurityModal()">🛡️ 安全</button>` : ''}
 <button type="button" class="danger" onclick="window.location.href='?logout=1'">🚪 退出</button>
 </div>
