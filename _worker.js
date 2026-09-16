@@ -939,7 +939,7 @@ function renderLoginPage(url, error = '') {
     return `<!DOCTYPE html>
 <html>
 <head>
-<title>${escapeHTML(FileName)}</title>
+<title>${escapeHTML(FileName)}管理面板</title>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>
@@ -971,7 +971,7 @@ function renderGuestPage(url, guest, displayApiUrl, displayConfig, apiHtml, conf
     return `<!DOCTYPE html>
 <html>
 <head>
-<title>${escapeHTML(FileName)}</title>
+<title>${escapeHTML(FileName)}访客订阅</title>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>${getToolStyles()}</style>
@@ -1034,7 +1034,7 @@ function renderAdminPage(url, content, hasKV, settings, adminApiHtml, adminConfi
     return `<!DOCTYPE html>
 <html>
 <head>
-<title>${escapeHTML(settings.subName)}</title>
+<title>${escapeHTML(FileName)}管理面板</title>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>${getToolStyles()}</style>
